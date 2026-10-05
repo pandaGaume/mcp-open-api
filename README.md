@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 <p align="center">
+  <img src="docs/assets/logo.png" alt="mcp-open-api logo: a blue pixel-art panda holding an API specification, with connected tools glowing on its chest" width="180" />
   <img src="docs/assets/mcp-broker-family.png" alt="MCP Broker Family" width="64" height="64" />
 </p>
 
