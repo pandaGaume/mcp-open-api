@@ -1,18 +1,18 @@
-// What a `pattern` check costs, three engines, typical and hostile inputs:
+// What a `pattern` check costs, typical and hostile inputs:
 //   v8     the built-in RegExp (backtracking)
-//   re2    the native RE2 binding (linear time)
-//   re2js  the pure JavaScript port of RE2 (linear time)
+//   re2js  the pure JavaScript port of RE2 (linear time), what the runtime uses
+//
+// The native `re2` binding was measured once and rejected (docs/compiler.md):
+// a downloaded, unverified binary, Node 22 or later only, node-gyp otherwise.
 //
 //   node bench/regex.mjs
 import { createRequire } from "node:module";
 import { cpus } from "node:os";
 const require = createRequire(import.meta.url);
-const RE2 = require("re2");
 const { RE2JS } = require("re2js");
 
 const engines = {
     v8: (p) => { const re = new RegExp(p, "u"); return (s) => re.test(s); },
-    re2: (p) => { const re = new RE2(p, "u"); return (s) => re.test(s); },
     re2js: (p) => { const re = RE2JS.compile(p); return (s) => re.matcher(s).find(); },
 };
 

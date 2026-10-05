@@ -228,7 +228,7 @@ Le validateur n'est pas non plus la seule barrière : les limites de la ressourc
 
 Un `pattern` est exécuté sur chaque argument reçu. Le moteur de V8 procède par retour arrière : une expression comme `^(a+)+$` peut bloquer la boucle d'événements du broker pendant des secondes sur une entrée piégée (ReDoS), avec le même effet que les grosses réponses mesurées au banc. Tous les slots attendent.
 
-Mesuré par [bench/regex.mjs](../bench/regex.mjs) (Node 22.20, Intel Core Ultra 7 255H), `re2` 1.24 (module natif) et `re2js` 2.8 (portage JavaScript) :
+Mesuré par [bench/regex.mjs](../bench/regex.mjs) (Node 22.20, Intel Core Ultra 7 255H) avec `re2js` 2.8 (portage JavaScript de RE2). La colonne du module natif `re2` 1.24 a été mesurée une fois, le 2026-10-05, avant qu'il soit écarté ; le banc ne l'inclut plus.
 
 | cas | V8 | `re2` natif | `re2js` |
 | --- | --- | --- | --- |
@@ -240,12 +240,25 @@ Mesuré par [bench/regex.mjs](../bench/regex.mjs) (Node 22.20, Intel Core Ultra 
 | `^(a+)+$` sur 28 `a` et `!` | **860 ms** | **71 ns** | **1,0 µs** |
 | compilation d'un motif, au chargement | 94 ns | 6,5 µs | 4,7 µs |
 
-Sur un motif ordinaire, RE2 est environ trois fois plus lent que V8, de quelques dizaines de nanosecondes : rien devant les 0,3 ms de plomberie. Sur un motif piégé, V8 explose (860 ms pour 29 caractères, et le double à chaque caractère de plus) quand RE2 reste sous la microseconde. Le gain de RE2 n'est pas la vitesse moyenne, c'est **le pire cas borné**, et c'est le pire cas qui bloque le broker.
+Sur un motif ordinaire, RE2 est plus lent que V8, de quelques dizaines à quelques centaines de nanosecondes : rien devant les 0,3 ms de plomberie. Sur un motif piégé, V8 explose (860 ms pour 29 caractères, et le double à chaque caractère de plus) quand RE2 reste autour de la microseconde. Le gain de RE2 n'est pas la vitesse moyenne, c'est **le pire cas borné**, et c'est le pire cas qui bloque le broker.
 
-**Décision : le runtime évalue les `pattern` avec RE2.**
+**Décision : le runtime évalue les `pattern` avec `re2js`, et seulement avec lui.**
 
-- le module natif `re2` par défaut ; s'il ne se charge pas sur la plateforme, `re2js`, plus lent mais toujours en temps linéaire ; jamais le moteur de V8 ;
-- les deux fonctionnent avec `--disallow-code-generation-from-strings` (vérifié) ;
+Le module natif `re2` est plus rapide, mais il a été écarté pour ce qu'il coûte à l'installation et à l'exploitation (constaté sur `re2` 1.24.1) :
+
+| | `re2` natif | `re2js` |
+| --- | --- | --- |
+| versions de Node | 22 et plus seulement, alors que le broker supporte Node 20 | toutes |
+| installation | télécharge un binaire depuis GitHub au moment de `npm install`, sinon le compile avec `node-gyp` (Python et compilateur C++, Visual Studio Build Tools sous Windows) | JavaScript pur |
+| hors ligne, derrière un proxy, ou `--ignore-scripts` | pas de binaire, ou échec de compilation | rien de particulier |
+| intégrité | le binaire téléchargé échappe à l'empreinte du lockfile, et `re2` 1.24.1 ne publie aucune empreinte : il n'est vérifié par rien, à part TLS | couvert par l'empreinte du lockfile, comme tout paquet |
+| taille et dépendances | 17 Mo, plus `node-gyp`, `nan`, `install-artifact-from-github` | 872 Ko, aucune dépendance |
+| code natif dans le broker | oui | non |
+
+Pour le runtime :
+
+- `re2js` fonctionne avec `--disallow-code-generation-from-strings` (vérifié) ;
+- le moteur de V8 n'est jamais utilisé pour un `pattern` venu d'un manifeste ;
 - RE2 ne connaît ni les références arrière (`\1`) ni les assertions avant ou arrière (`(?=`, `(?<=`) : un motif que RE2 ne compile pas est une **erreur de compilation** du binding, ce qui écarte d'office la plupart des motifs dangereux ;
 - la longueur de l'argument reste vérifiée **avant** son `pattern`, et le compilateur exige un `maxLength` sur tout argument qui porte un `pattern` : RE2 est linéaire, pas gratuit.
 
@@ -331,7 +344,7 @@ Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 | `yaml` | compilateur | specs en YAML |
 | Ajv | compilateur, CLI, tests, bundle `.mcpb` | validation du binding et des manifestes au design time, génération *standalone* |
 | validateur précompilé (maison) | runtime | validation des arguments dans le broker, sans génération de code |
-| `re2`, repli `re2js` | runtime, compilateur | `pattern` en temps linéaire ; le compilateur vérifie que RE2 accepte chaque motif |
+| `re2js` | runtime, compilateur | `pattern` en temps linéaire, JavaScript pur ; le compilateur vérifie que RE2 accepte chaque motif |
 | `$ref` internes, JSON canonique (maison) | compilateur | peu de code, aucune dépendance |
 | JSONPath RFC 9535 | compilateur, avec l'Overlay | application des actions |
 
@@ -344,7 +357,7 @@ Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 | restriction des schémas | par composition `allOf` spec et binding, sans preuve |
 | génération de code dans le broker | `--disallow-code-generation-from-strings` par défaut : le CLI se relance avec ; contrôle `node:vm` en CI ; `broker_diagnose` signale un broker qui l'autorise |
 | validation des arguments | validateur précompilé maison ; Ajv au design time seulement |
-| expressions régulières | RE2 : module natif `re2`, repli sur `re2js`, jamais le moteur de V8 ; un motif que RE2 refuse est une erreur de compilation |
+| expressions régulières | `re2js` seul, jamais le moteur de V8 ni le module natif `re2` ; un motif que RE2 refuse est une erreur de compilation |
 | certification | signature Ed25519 détachée, comme les `.mcpb`, sur le manifeste canonique |
 | clés qui font foi | la clé du broker pour tous les slots, et les clés déclarées par slot dans le fichier de sécurité (`slotSigners`) pour leur slot seulement |
 | code généré | seulement dans un bundle `.mcpb`, hors du broker, lot ultérieur |
@@ -352,4 +365,3 @@ Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 ## Questions ouvertes
 
 - **Rotation de la clé du broker** : que deviennent les manifestes signés par l'ancienne clé ? Proposition : la clé précédente reste valide pour vérifier, jamais pour signer, jusqu'à ce que chaque manifeste ait été re-signé.
-- **Dépendance native** : `re2` est un module natif, avec des binaires précompilés pour les plateformes courantes. Faut-il le déclarer en `optionalDependencies`, pour qu'une installation sans compilateur C++ retombe sur `re2js` au lieu d'échouer ?
