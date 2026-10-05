@@ -1,0 +1,43 @@
+name: release mcp-open-api
+
+on:
+    push:
+        tags: ["v*"]
+
+env:
+    # Opt into Node 24 for JavaScript-based actions (checkout, setup-node, ...).
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            id-token: write
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22.x
+                  registry-url: https://registry.npmjs.org
+                  cache: npm
+            # OIDC trusted publishing needs npm 11.5.1 or later.
+            - name: Upgrade npm to enable OIDC trusted publishing
+              run: |
+                  npm install -g npm@^11
+                  echo "npm version after upgrade: $(npm --version)"
+            - run: npm ci
+            - run: npm run format
+            - run: npm run build
+            - run: npm run typecheck
+            - run: npm test
+            - run: npm publish --access public --provenance
+            - name: Dump npm debug log on failure
+              if: failure()
+              run: |
+                  npm --version
+                  npm config list
+                  for f in /home/runner/.npm/_logs/*.log; do echo "----- $f -----"; cat "$f"; done
+            - uses: softprops/action-gh-release@v2
+              with:
+                  generate_release_notes: true
