@@ -31,10 +31,12 @@
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.js"
-        }
+        },
+        "./schemas/binding-1.schema.json": "./schemas/binding-1.schema.json"
     },
     "files": [
-        "dist"
+        "dist",
+        "schemas"
     ],
     "scripts": {
         "build": "tsup",
@@ -53,6 +55,7 @@
         "@cyanmycelium/mcp-broker-provider": "^0.4.1",
         "@cyanmycelium/mcp-core": "^1.4.1",
         "@types/node": "^20.11.0",
+        "ajv": "^8.20.0",
         "prettier": "^3.2.0",
         "tsup": "^8.5.1",
         "typescript": "^5.4.0",

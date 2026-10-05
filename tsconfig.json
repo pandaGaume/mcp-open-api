@@ -13,6 +13,7 @@
         "noImplicitReturns": true,
         "noUnusedLocals": true,
         "skipLibCheck": true,
+        "resolveJsonModule": true,
         "baseUrl": ".",
         "paths": {
             "@cyanmycelium/mcp-open-api": ["src/index.ts"]

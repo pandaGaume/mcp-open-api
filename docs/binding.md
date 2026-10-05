@@ -279,7 +279,7 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
     "slot": "vannes",
     "title": "Vannes du réseau Nord",
     "instructions": "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
-    "spec": { "path": "specs/ot-gateway.yaml", "sha256": "9f2c…" },
+    "spec": { "path": "specs/ot-gateway.yaml", "sha256": "9f2c4e1b7a0d3c5f8e6b2a1d4c7f0e9b3a6d5c8f1e4b7a0d2c5f8e1b4a7d0c3f" },
     "target": {
         "baseUrl": "https://ot-gw.local/api/v2",
         "auth": { "secretRef": "otGateway" },

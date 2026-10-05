@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/pandaGaume/mcp-open-api/main/schemas/binding-1.schema.json",
+  "title": "mcp-open-api binding, format 1",
+  "description": "Which operations of an OpenAPI spec become an MCP slot, and how each one is translated. See docs/binding.md. Rules that need the spec (narrowing, unknown operations, name collisions) are checked by the compiler, not by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding", "slot", "spec", "target"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "binding": { "const": 1, "description": "Format version." },
+    "slot": { "$ref": "#/$defs/slotName" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "instructions": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "spec": { "$ref": "#/$defs/source" },
+    "target": { "$ref": "#/$defs/target" },
+    "governance": { "$ref": "#/$defs/governance" },
+    "tools": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/operationKey" },
+      "additionalProperties": { "$ref": "#/$defs/tool" }
+    },
+    "resources": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/operationKey" },
+      "additionalProperties": { "$ref": "#/$defs/resource" }
+    },
+    "arazzo": { "$ref": "#/$defs/source" }
+  },
+  "$defs": {
+    "slotName": {
+      "description": "Slot name. A leading underscore is reserved by the broker (_broker, _all).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    },
+    "operationKey": {
+      "description": "An operationId of the spec, or \"<METHOD> <path>\" when the spec gives none. For a workflow tool, a workflowId.",
+      "type": "string",
+      "pattern": "^([A-Za-z_][A-Za-z0-9_.-]{0,127}|(GET|PUT|POST|DELETE|PATCH|HEAD|OPTIONS) /[^\\s]*)$"
+    },
+    "location": {
+      "description": "Where an argument travels: path.<name>, query.<name>, header.<name>, body, body.<dotted.path>. In a workflow tool: inputs.<name>.",
+      "type": "string",
+      "pattern": "^((path|query|header|inputs)\\.[^.\\s]+|body(\\.[^.\\s]+)*)$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "source": {
+      "description": "A document read by the compiler: a path relative to the binding, or a URL, and its SHA-256.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https?://" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "oneOf": [{ "required": ["path"] }, { "required": ["url"] }]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseUrl"],
+      "properties": {
+        "baseUrl": { "type": "string", "pattern": "^https?://[^\\s]+$", "description": "Must be listed in the broker's slotDefinitions.allowedTargets." },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretRef"],
+          "properties": {
+            "secretRef": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$", "description": "An upstreamSecrets entry of the broker's security file." },
+            "scheme": { "type": "string", "minLength": 1, "description": "The spec's securityScheme to apply, when it declares several." }
+          }
+        },
+        "headers": {
+          "type": "object",
+          "description": "Fixed, non-secret headers.",
+          "propertyNames": { "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$", "not": { "pattern": "^([Aa]uthorization|[Cc]ookie|[Pp]roxy-[Aa]uthorization)$" } },
+          "additionalProperties": { "type": "string" }
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 600000, "default": 10000 },
+        "maxResponseBytes": { "type": "integer", "minimum": 1, "maximum": 67108864, "default": 1048576 }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "namespace"],
+      "properties": {
+        "domain": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+        "namespace": { "type": "string", "minLength": 1 }
+      }
+    },
+    "note": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "Why these choices. Shown to the Tier 4 operator, never sent to an MCP client." },
+    "arg": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "hide": { "type": "boolean" },
+        "fixed": { "description": "Imposed value, never chosen by the caller. Implies hide." },
+        "pattern": { "type": "string", "minLength": 1 },
+        "enum": { "type": "array", "minItems": 1, "uniqueItems": true },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "maxLength": { "type": "integer", "minimum": 0 },
+        "maxItems": { "type": "integer", "minimum": 0 }
+      },
+      "if": { "required": ["fixed"] },
+      "then": { "properties": { "hide": { "const": true } } }
+    },
+    "args": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/location" },
+      "additionalProperties": { "$ref": "#/$defs/arg" }
+    },
+    "pickPath": {
+      "type": "string",
+      "pattern": "^[^.\\[\\]\\s]+(\\[\\])?(\\.[^.\\[\\]\\s]+(\\[\\])?)*$"
+    },
+    "output": {
+      "description": "\"all\", or a selection of fields. Required: a response is never forwarded whole by default.",
+      "oneOf": [
+        { "const": "all" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pick"],
+          "properties": {
+            "pick": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/pickPath" } },
+            "maxItems": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readOnlyHint": { "type": "boolean" },
+        "destructiveHint": { "type": "boolean" },
+        "idempotentHint": { "type": "boolean" },
+        "openWorldHint": { "type": "boolean" }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "resourcePath"],
+      "properties": {
+        "capability": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)+$", "description": "Must sit under <governance.domain>.*" },
+        "resourcePath": { "type": "string", "minLength": 1, "description": "Relative to the namespace. Templates use argument locations: valves/{path.id}." },
+        "value": { "$ref": "#/$defs/location", "description": "The argument carrying the written value. The broker's limits for the resource are derived from its schema." },
+        "resultRequired": { "type": "boolean" }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output"],
+      "properties": {
+        "from": { "enum": ["operation", "workflow"], "default": "operation", "description": "workflow: the key is an Arazzo workflowId. Reserved: refused by the compiler until workflows run." },
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,47}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "note": { "$ref": "#/$defs/note" },
+        "args": { "$ref": "#/$defs/args" },
+        "output": { "$ref": "#/$defs/output" },
+        "annotations": { "$ref": "#/$defs/annotations" },
+        "authorization": { "$ref": "#/$defs/authorization" },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 600000 }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "output"],
+      "properties": {
+        "uri": { "type": "string", "pattern": "^[a-z][a-z0-9+.-]*://[^\\s]*$", "description": "A fixed URI, or a template whose placeholders are argument locations: valve://nord/{path.id}." },
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "note": { "$ref": "#/$defs/note" },
+        "args": { "$ref": "#/$defs/args" },
+        "output": { "$ref": "#/$defs/output" },
+        "authorization": { "$ref": "#/$defs/authorization" },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 600000 }
+      }
+    },
+    "slotExtension": {
+      "description": "x-mcp-slot, at the root of a spec through an Overlay: the binding's top-level fields except tools, resources and spec.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "slot", "target"],
+      "properties": {
+        "binding": { "const": 1 },
+        "slot": { "$ref": "#/$defs/slotName" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "instructions": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "target": { "$ref": "#/$defs/target" },
+        "governance": { "$ref": "#/$defs/governance" },
+        "arazzo": { "$ref": "#/$defs/source" }
+      }
+    }
+  }
+}
