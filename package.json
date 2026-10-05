@@ -40,6 +40,7 @@
         "build": "tsup",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "test": "vitest run",
+        "bench": "node bench/run.mjs",
         "format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
         "format:fix": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
         "prepublishOnly": "npm run build"
