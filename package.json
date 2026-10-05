@@ -51,12 +51,15 @@
         "@cyanmycelium/mcp-core": "^1.4.1"
     },
     "devDependencies": {
+        "@cfworker/json-schema": "^4.1.1",
         "@cyanmycelium/mcp-broker": "^1.6.1",
         "@cyanmycelium/mcp-broker-provider": "^0.4.1",
         "@cyanmycelium/mcp-core": "^1.4.1",
         "@types/node": "^20.11.0",
         "ajv": "^8.20.0",
         "prettier": "^3.2.0",
+        "re2": "^1.24.1",
+        "re2js": "^2.8.6",
         "tsup": "^8.5.1",
         "typescript": "^5.4.0",
         "vite": "8.3.2",

@@ -16,7 +16,7 @@ Statut : proposition, version 1 du format. Rien n'est encore implémenté.
 1. **Refus par défaut.** Une opération absente de `tools` et de `resources` n'existe pas dans le slot. Il n'y a pas de sélection par motif (`*`, tag, préfixe de chemin) : ajouter une opération, c'est écrire sa clé.
 2. **Clé = l'opération, pas l'outil.** Une entrée est indexée par l'`operationId` de la spec, ou par `"<MÉTHODE> <chemin>"` quand la spec n'en donne pas (`"GET /valves/{id}"`). Renommer un outil ne casse rien, et une opération qui disparaît de la spec est signalée par sa clé.
 3. **Chaque argument est adressé par son emplacement HTTP** : `path.id`, `query.limit`, `header.X-Site`, `body.position`, `body.config.mode`. Le même adressage sert partout : `args`, `resourcePath`, `authorization.value`.
-4. **Restreindre, jamais élargir.** Un binding peut resserrer le schéma de la spec (`pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems`), jamais l'élargir. Le compilateur refuse un `maximum: 200` là où la spec dit 100.
+4. **Restreindre, jamais élargir, par construction.** Les restrictions du binding (`pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems`) ne remplacent pas le schéma de la spec : le compilateur les **compose** avec lui (`allOf`). Une valeur doit satisfaire les deux, donc un `maximum: 200` là où la spec dit 100 reste borné à 100. Le compilateur signale seulement les contradictions (plus aucune valeur possible) et les valeurs d'`enum` invalides pour la spec. Voir [compiler.md](compiler.md).
 5. **Rien de masqué sans valeur.** Un argument requis par la spec et masqué (`hide`) doit recevoir une valeur `fixed`, ou avoir un `default` dans la spec.
 6. **Sortie explicite.** Chaque outil déclare sa sortie : une sélection de champs (`pick`), ou `"all"` écrit en toutes lettres. Les réponses sont le premier coût côté agent et le premier risque de fuite.
 7. **Aucun code.** Des emplacements, des valeurs fixes, des restrictions, des sélections de champs. Les seules expressions admises sont celles d'Arazzo, et seulement dans les workflows.
@@ -115,7 +115,7 @@ Chaque clé est un emplacement : `path.<nom>`, `query.<nom>`, `header.<nom>`, `b
 | `description` | remplace la description de la spec |
 | `hide` | l'argument n'est pas exposé ; il prend sa valeur `fixed` ou son `default` |
 | `fixed` | valeur imposée, jamais choisie par l'appelant ; implique `hide` |
-| `pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems` | restrictions, vérifiées comme plus étroites que la spec |
+| `pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems` | restrictions, composées avec le schéma de la spec (`allOf`) : elles ne peuvent que resserrer |
 
 Règles de nommage par défaut :
 
@@ -250,7 +250,7 @@ Erreurs :
 - `sha256` de la spec différent de celui du binding ;
 - clé d'opération introuvable dans la spec ;
 - emplacement d'`args` introuvable dans l'opération ;
-- restriction plus large que la spec ;
+- restriction contradictoire avec la spec (plus aucune valeur possible), ou valeur d'`enum` invalide pour la spec ;
 - argument requis masqué sans `fixed` ni `default` ;
 - deux arguments du même nom, ou nom d'outil invalide, ou en double ;
 - `output` absent, ou chemin de `pick` absent du schéma de réponse ;
