@@ -3,6 +3,7 @@ import { BrokerAccessGuard, type IBrokerAuthority } from "@cyanmycelium/mcp-uns"
 import type { IManifest } from "../manifest/manifest.types";
 import { ManifestBehavior } from "./behavior";
 import { ManifestEngine, type IEngineOptions } from "./engine";
+import { opened } from "./open";
 
 /** What a broker method answers on a loopback handle (mcp-broker `BrokerMethodOutcome`). */
 export type BrokerMethodOutcome = { readonly result: unknown } | { readonly error: { readonly code: number; readonly message: string; readonly data?: unknown } };
@@ -166,21 +167,4 @@ export async function serveManifestOver(transport: IProviderTransport, manifest:
         const e = error as { message?: string; code?: number; data?: unknown };
         throw new ManifestDeclarationError(manifest.slot, { message: e.message ?? String(error), ...(e.code !== undefined ? { code: e.code } : {}), data: e.data });
     }
-}
-
-/** `start()` resolving is not a connection guarantee: wait for the transport to report itself open. */
-function opened(transport: IMessageTransport, timeoutMs: number): Promise<void> {
-    if (transport.isOpen) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-        const started = Date.now();
-        const timer = setInterval(() => {
-            if (transport.isOpen) {
-                clearInterval(timer);
-                resolve();
-            } else if (Date.now() - started > timeoutMs) {
-                clearInterval(timer);
-                reject(new Error(`the provider socket did not open within ${timeoutMs} ms`));
-            }
-        }, 10);
-    });
 }

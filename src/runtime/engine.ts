@@ -42,6 +42,16 @@ export type EngineErrorCode =
     | "network_error"
     | "invalid_response";
 
+/** What {@link ManifestEngine.plan} returns: the HTTP request a call would send. */
+export interface IPlannedRequest {
+    readonly method: string;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body?: unknown;
+    /** The resource path the broker would be asked about, namespace included. */
+    readonly resourcePath?: string;
+}
+
 interface ICompiledTool {
     readonly tool: IManifestTool;
     readonly validate: Validator;
@@ -198,22 +208,10 @@ export class ManifestEngine {
             if (decision && tool.authorization?.resultRequired) this._guard!.report(decision, outcome, errorCode);
         };
 
-        // The request: every piece was prepared at load.
-        const url = new URL(this._base.pathname.replace(/\/$/, "") + compiled.path(args), this._base);
-        for (const [k, v] of compiled.query(args)) url.searchParams.append(k, v);
-        if (this._authQuery) url.searchParams.set(this._authQuery[0], this._authQuery[1]);
-        if (url.origin !== this._base.origin) return errorResult("invalid_arguments", "the arguments would change the target origin");
-
-        const headers: Record<string, string> = { ...this._fixedHeaders };
-        for (const [k, v] of compiled.headers(args)) headers[k.toLowerCase()] = v;
-        const traceparent = context?.meta?.["traceparent"];
-        if (typeof traceparent === "string" && TRACEPARENT.test(traceparent)) headers["traceparent"] = traceparent;
-        const bodyValue = compiled.body(args);
-        let body: Buffer | undefined;
-        if (bodyValue !== undefined) {
-            body = Buffer.from(JSON.stringify(bodyValue));
-            headers["content-type"] = "application/json";
-        }
+        const request = this._request(compiled, args, context);
+        if ("error" in request) return request.error;
+        const { url, headers, body: bodyValue } = request;
+        const body = bodyValue === undefined ? undefined : Buffer.from(JSON.stringify(bodyValue));
 
         let response;
         try {
@@ -260,9 +258,50 @@ export class ManifestEngine {
         return { content, structuredContent: isPlainObject(value) ? value : { value } };
     }
 
+    /**
+     * The request a call would send, built exactly as {@link callToolAsync}
+     * builds it, without asking the broker and without sending it: what a dry
+     * run shows. Credentials appear as the engine's secret resolver returned
+     * them, so a designer resolves them to placeholders.
+     */
+    plan(name: string, args: Args): { readonly request: IPlannedRequest } | { readonly error: McpToolResult } {
+        const compiled = this._tools.get(name);
+        if (!compiled) return { error: errorResult("unknown_tool", `unknown tool: ${name}`) };
+        const invalid = compiled.validate(args);
+        if (invalid)
+            return { error: errorResult("invalid_arguments", `argument ${invalid.path || "/"} fails "${invalid.keyword}"`, { path: invalid.path, keyword: invalid.keyword }) };
+        const request = this._request(compiled, args);
+        if ("error" in request) return request;
+        return {
+            request: {
+                method: compiled.method,
+                url: request.url.href,
+                headers: request.headers,
+                ...(request.body !== undefined ? { body: request.body } : {}),
+                ...(compiled.resourcePath ? { resourcePath: compiled.resourcePath(args) } : {}),
+            },
+        };
+    }
+
     /** Closes the connections this engine opened. */
     close(): void {
         if (this._ownsPool) this._pool.close();
+    }
+
+    /** The request of one call: every piece was prepared at load. */
+    private _request(compiled: ICompiledTool, args: Args, context?: IAccessContext): { url: URL; headers: Record<string, string>; body?: unknown } | { error: McpToolResult } {
+        const url = new URL(this._base.pathname.replace(/\/$/, "") + compiled.path(args), this._base);
+        for (const [k, v] of compiled.query(args)) url.searchParams.append(k, v);
+        if (this._authQuery) url.searchParams.set(this._authQuery[0], this._authQuery[1]);
+        if (url.origin !== this._base.origin) return { error: errorResult("invalid_arguments", "the arguments would change the target origin") };
+
+        const headers: Record<string, string> = { ...this._fixedHeaders };
+        for (const [k, v] of compiled.headers(args)) headers[k.toLowerCase()] = v;
+        const traceparent = context?.meta?.["traceparent"];
+        if (typeof traceparent === "string" && TRACEPARENT.test(traceparent)) headers["traceparent"] = traceparent;
+        const body = compiled.body(args);
+        if (body !== undefined) headers["content-type"] = "application/json";
+        return { url, headers, ...(body !== undefined ? { body } : {}) };
     }
 
     private _resolveAuth(auth: ManifestAuth | undefined, secrets: SecretResolver | undefined, problems: string[]): { headers: Record<string, string>; query?: [string, string] } {

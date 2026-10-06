@@ -43,20 +43,26 @@
             "types": "./dist/host/index.d.ts",
             "import": "./dist/host/index.js"
         },
+        "./designer": {
+            "types": "./dist/designer/index.d.ts",
+            "import": "./dist/designer/index.js"
+        },
         "./schemas/binding-1.schema.json": "./schemas/binding-1.schema.json"
     },
     "files": [
         "dist",
-        "schemas"
+        "schemas",
+        "ui"
     ],
     "scripts": {
         "build": "tsup",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "test": "vitest run",
         "bench": "node bench/run.mjs",
-        "smoke": "node --input-type=module -e \"await import('./dist/index.js'); await import('./dist/compiler/index.js'); await import('./dist/host/index.js'); console.log('dist entries load')\" && node scripts/serve-check.mjs",
-        "format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
-        "format:fix": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+        "demo:designer": "node scripts/designer-demo.mjs",
+        "smoke": "node --input-type=module -e \"await import('./dist/index.js'); await import('./dist/compiler/index.js'); await import('./dist/host/index.js'); await import('./dist/designer/index.js'); console.log('dist entries load')\" && node scripts/serve-check.mjs",
+        "format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"ui/**/*.{js,html,css}\" \"scripts/*.mjs\"",
+        "format:fix": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"ui/**/*.{js,html,css}\" \"scripts/*.mjs\"",
         "prepublishOnly": "npm run build"
     },
     "peerDependencies": {

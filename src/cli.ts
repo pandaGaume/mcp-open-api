@@ -23,6 +23,11 @@ const USAGE = `mcp-open-api <command>
       Serves every signed manifest of the configured directory as a broker slot.
       Run one host per API to keep their secrets and failures apart.
       Runs with ${NO_CODEGEN}; set MCP_OPEN_API_ALLOW_CODE_GENERATION=1 to opt out.
+
+  design [--config <designer.json>]
+      Publishes the designer on its slot (default "designer"), for the Tier 4 page
+      and for agents. It writes signed manifests into the hosts it names; it never
+      signs one. Prints the static mount the broker needs to serve the page.
 `;
 
 export interface ICliIo {
@@ -44,8 +49,8 @@ function option(args: string[], name: string): string | undefined {
 const describe = (d: IDiagnostic): string =>
     `${d.severity === "error" ? "error  " : "warning"} ${d.code}${d.binding ? ` at binding ${d.binding}` : ""}${d.spec ? ` at spec ${d.spec}` : ""}: ${d.message}`;
 
-/** Runs one command and returns its exit code; `serve` also returns the running host, for the caller to stop. */
-export async function run(argv: readonly string[], io: ICliIo = consoleIo): Promise<{ code: number; host?: OpenApiHost }> {
+/** Runs one command and returns its exit code; `serve` and `design` also return what they started, for the caller to stop. */
+export async function run(argv: readonly string[], io: ICliIo = consoleIo): Promise<{ code: number; host?: { stop(): Promise<void> } }> {
     const args = [...argv];
     const command = args.shift();
     switch (command) {
@@ -123,6 +128,17 @@ export async function run(argv: readonly string[], io: ICliIo = consoleIo): Prom
             for (const r of host.refused) io.err(`refused ${r.file}:\n  - ${r.reasons.join("\n  - ")}`);
             if (host.slots.length === 0) io.err("no manifest served");
             return { code: host.slots.length > 0 ? 0 : 1, host };
+        }
+        case "design": {
+            // Loaded on demand, like the compiler it uses.
+            const { DESIGNER_UI_DIR, loadDesignerConfig, startDesigner } = await import("./designer/designer");
+            const { config, hosts } = loadDesignerConfig(option(args, "--config") ?? "designer.json");
+            const designer = await startDesigner(config, hosts, { onPublish: (event) => io.out(`published ${JSON.stringify(event)}`) });
+            io.out(`designer on slot "${designer.slot}", publishing into: ${hosts.map((h) => h.name).join(", ")}`);
+            io.out(`Tier 4 page: add to the broker's config.json, then open /ui/${designer.slot}/ on the broker:`);
+            io.out(`  "www": { "mounts": [{ "urlPrefix": "/ui/${designer.slot}", "dir": ${JSON.stringify(DESIGNER_UI_DIR)} }] }`);
+            io.out("  and list the broker's own origin in allowedOrigins.");
+            return { code: 0, host: designer };
         }
         default:
             io.err(USAGE);

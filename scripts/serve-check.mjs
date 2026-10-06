@@ -105,7 +105,14 @@ const session = init.headers.get("mcp-session-id");
 await init.text();
 const res = await post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lire_vanne", arguments: { vanne: "V-012" } } }, session);
 const text = await res.text();
-const data = JSON.parse(text.startsWith("event:") || text.startsWith("data:") ? text.split("\n").find((l) => l.startsWith("data:")).slice(5) : text);
+const data = JSON.parse(
+    text.startsWith("event:") || text.startsWith("data:")
+        ? text
+              .split("\n")
+              .find((l) => l.startsWith("data:"))
+              .slice(5)
+        : text
+);
 
 child.kill("SIGTERM");
 await new Promise((r) => child.on("exit", r));

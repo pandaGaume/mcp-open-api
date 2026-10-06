@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Slot designer</title>
+        <link rel="stylesheet" href="designer.css" />
+        <script type="module" src="designer.js"></script>
+    </head>
+    <body>
+        <header class="bar">
+            <div class="brand">
+                <strong>Slot designer</strong>
+                <span class="muted" id="slot-label"></span>
+            </div>
+            <form id="connect" class="inline">
+                <label class="grow">
+                    <span class="sr">Operator token</span>
+                    <input id="token" type="password" autocomplete="off" placeholder="Operator token (empty when the broker has no client auth)" />
+                </label>
+                <button type="submit">Connect</button>
+            </form>
+            <span id="status" class="status">not connected</span>
+        </header>
+
+        <main>
+            <section id="step-source" class="card">
+                <h2><span class="num">1</span> Source</h2>
+                <p class="muted">The page reads the spec from your disk and sends its text. The designer never fetches a spec by URL.</p>
+                <form id="import" class="grid">
+                    <label
+                        >Host
+                        <select id="host" required></select
+                    ></label>
+                    <label>Slot <input id="slot" required pattern="^[a-z][a-z0-9\-]{0,47}$" placeholder="vannes" /></label>
+                    <label class="wide">OpenAPI 3.0 or 3.1, JSON or YAML <input id="spec-file" type="file" accept=".json,.yaml,.yml" required /></label>
+                    <button type="submit" disabled>Import</button>
+                </form>
+                <div id="hosts"></div>
+            </section>
+
+            <section id="step-select" class="card" hidden>
+                <h2><span class="num">2</span> Selection</h2>
+                <p class="muted">Nothing is exposed by default. Write operations need an authorization and your approval, one by one.</p>
+                <input id="filter" type="search" placeholder="Filter operations" />
+                <div id="operations"></div>
+            </section>
+
+            <section id="step-tune" class="card" hidden>
+                <h2><span class="num">3</span> Tuning</h2>
+                <div id="slot-form" class="grid"></div>
+                <div id="tools"></div>
+            </section>
+
+            <section id="step-try" class="card" hidden>
+                <h2><span class="num">5</span> Trial</h2>
+                <p class="muted">A dry run shows the request a call would send. Nothing is sent, the broker is not asked, and credentials appear as placeholders.</p>
+                <form id="dry-run" class="grid">
+                    <label
+                        >Tool
+                        <select id="try-tool"></select
+                    ></label>
+                    <label class="wide">Arguments (JSON) <textarea id="try-args" rows="4">{}</textarea></label>
+                    <button type="submit">Dry run</button>
+                </form>
+                <pre id="try-result" class="code" hidden></pre>
+            </section>
+
+            <section id="step-review" class="card" hidden>
+                <h2><span class="num">6</span> Review and publication</h2>
+                <p class="muted">
+                    Everything below is read from the exact text you sign. Approve each write tool, load your Ed25519 key, then sign. The key stays in this page: it is never sent.
+                </p>
+                <div id="review"></div>
+                <form id="publish" class="grid">
+                    <label class="wide">Your signing key (PKCS#8 PEM, from <code>mcp-open-api keygen</code>) <input id="key-file" type="file" accept=".pem" /></label>
+                    <button type="submit" disabled>Sign and publish</button>
+                </form>
+                <div id="publish-result"></div>
+            </section>
+
+            <section id="step-advanced" class="card" hidden>
+                <details>
+                    <summary>Binding (binding-1)</summary>
+                    <p class="muted">The source of the manifest. Edit it for what the form does not cover, or keep a copy.</p>
+                    <textarea id="binding-json" rows="16" spellcheck="false"></textarea>
+                    <div class="inline">
+                        <button id="binding-apply" type="button">Apply</button>
+                        <button id="binding-download" type="button" class="secondary">Download</button>
+                    </div>
+                </details>
+            </section>
+        </main>
+
+        <aside id="checks" class="card checks" hidden>
+            <h2><span class="num">4</span> Checks</h2>
+            <div id="checks-summary"></div>
+            <ul id="diagnostics"></ul>
+        </aside>
+    </body>
+</html>

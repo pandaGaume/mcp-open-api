@@ -33,7 +33,8 @@ Converting OpenAPI to MCP is not new. A 300-operation spec does not make a good 
 - **Implemented**: the binding format (`binding-1`, JSON Schema and types) and the **engine**: a manifest served as a broker slot, interpreted without generating code, with argument validation (RE2 patterns), the broker's decision and engineering limits on every call, connection pooling, response size cap and projection. Tested end to end behind a real broker, and benchmarked (`bench/`).
 - **Implemented**: the **compiler** (`@cyanmycelium/mcp-open-api/compiler`): OpenAPI 3.0 or 3.1 (JSON or YAML) plus a binding, into a canonical manifest and its SHA-256, with every diagnostic at once. A pure function; the manifest compiled from a spec behaves like a hand-written one behind the broker.
 - **Implemented**: the **host** and the **CLI**: signed manifests (Ed25519, on the canonical form), served from their own process over one provider socket, with code generation disallowed.
-- **Not yet**: Overlay and Arazzo inputs, MCP resources, secrets read from mcp-vault, the Tier 4 validation page, the MCP path for agents.
+- **Implemented**: the **designer** (`@cyanmycelium/mcp-open-api/designer`, `mcp-open-api design`): a provider on the `designer` slot whose tools import a spec, tune a draft binding, compile and check it against the target host, dry-run a call, and publish a signed manifest into the host's folder. Its **Tier 4 page** (`ui/`) walks an operator through the same steps and signs in the browser with the operator's own Ed25519 key; the designer holds no key a host trusts.
+- **Not yet**: Overlay and Arazzo inputs, MCP resources, secrets read from mcp-vault, a real (not dry) trial of read-only tools, the page pushed by the provider into the broker (it is served by a config mount until the broker supports that), the scoping of the MCP path for agents.
 
 ```bash
 npx @cyanmycelium/mcp-open-api compile vannes.binding.json --out manifests/vannes.json
@@ -55,6 +56,27 @@ npx @cyanmycelium/mcp-open-api serve --config mcp-open-api.json
 ```
 
 The host's provider identity (`VANNES_PROVIDER_SECRET`) is an entry of the broker's security file, with its `allowedResources`.
+
+### The designer
+
+```bash
+npx @cyanmycelium/mcp-open-api design --config designer.json
+```
+
+`designer.json` names the broker and the hosts it publishes into, by the path of each host's own config:
+
+```json
+{
+    "broker": { "url": "ws://broker.local:3000/providers", "secretEnv": "DESIGNER_PROVIDER_SECRET" },
+    "hosts": { "vannes": "../vannes/mcp-open-api.json" }
+}
+```
+
+The command prints the static mount to add to the broker's `config.json` (`www.mounts`, under `/ui/designer`); the broker's own origin must be in `allowedOrigins`. Open `/ui/designer/` on the broker, connect with your token, and go: source, selection, tuning, checks, dry run, review. Publishing writes `<slot>.json`, its `.sig` and the sources (`sources/<slot>.binding.json`, the spec) into the host's folder; restart that host to serve it.
+
+The page signs in the browser, with an Ed25519 PKCS#8 key from `mcp-open-api keygen`; its public half must be in the host's `trustedKeys`. Every design tool is also reachable over MCP; `designer_publish` refuses anything without that signature.
+
+`npm run build && npm run demo:designer` runs it all on one machine: a broker serving the page, a fake valve API, the designer and a demo key.
 
 Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.md).
 

@@ -18,7 +18,8 @@
         "paths": {
             "@cyanmycelium/mcp-open-api": ["src/index.ts"],
             "@cyanmycelium/mcp-open-api/compiler": ["src/compiler/index.ts"],
-            "@cyanmycelium/mcp-open-api/host": ["src/host/index.ts"]
+            "@cyanmycelium/mcp-open-api/host": ["src/host/index.ts"],
+            "@cyanmycelium/mcp-open-api/designer": ["src/designer/index.ts"]
         }
     },
     "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "tsup.config.ts"],
