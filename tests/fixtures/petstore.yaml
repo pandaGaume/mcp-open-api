@@ -1,0 +1,129 @@
+# A trimmed Swagger Petstore, OpenAPI 3.0: nullable, xml, nested $ref,
+# path-level parameters, an apiKey scheme, a non-JSON alternative body.
+openapi: 3.0.3
+info:
+  title: Swagger Petstore
+  version: 1.0.17
+servers:
+  - url: https://petstore3.swagger.io/api/v3
+paths:
+  /pet:
+    post:
+      operationId: addPet
+      summary: Add a new pet to the store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+          application/xml:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+  /pet/findByStatus:
+    get:
+      operationId: findPetsByStatus
+      summary: Finds Pets by status
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            default: available
+            enum: [available, pending, sold]
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pet"
+  /pet/{petId}:
+    get:
+      operationId: getPetById
+      summary: Find pet by ID
+      description: Returns a single pet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+components:
+  securitySchemes:
+    api_key:
+      type: apiKey
+      name: api_key
+      in: header
+  schemas:
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        name:
+          type: string
+          example: Dogs
+      xml:
+        name: category
+    Tag:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+      xml:
+        name: tag
+    Pet:
+      required: [name, photoUrls]
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 10
+        name:
+          type: string
+          example: doggie
+        category:
+          $ref: "#/components/schemas/Category"
+        photoUrls:
+          type: array
+          xml:
+            wrapped: true
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+        status:
+          type: string
+          nullable: true
+          description: pet status in the store
+          enum: [available, pending, sold]
+      xml:
+        name: pet

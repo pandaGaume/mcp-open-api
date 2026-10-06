@@ -1,0 +1,95 @@
+{
+    "openapi": "3.1.0",
+    "info": { "title": "OT gateway, valves", "version": "2.0.0" },
+    "servers": [{ "url": "https://ot-gw.local/api/v2" }],
+    "security": [{ "gatewayToken": [] }],
+    "paths": {
+        "/valves": {
+            "get": {
+                "operationId": "listValves",
+                "summary": "List the valves",
+                "tags": ["valves"],
+                "responses": {
+                    "200": {
+                        "description": "The valves",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["items"],
+                                    "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ValveSummary" } } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/valves/{id}": {
+            "parameters": [{ "$ref": "#/components/parameters/ValveId" }],
+            "get": {
+                "operationId": "getValve",
+                "summary": "Read a valve",
+                "description": "Position and state of one valve.",
+                "parameters": [{ "name": "debug", "in": "query", "schema": { "type": "boolean" }, "description": "Adds internal fields." }],
+                "responses": {
+                    "200": { "description": "The valve", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Valve" } } } },
+                    "404": { "description": "Unknown valve" }
+                }
+            }
+        },
+        "/valves/{id}/position": {
+            "parameters": [{ "$ref": "#/components/parameters/ValveId" }],
+            "put": {
+                "operationId": "setValvePosition",
+                "summary": "Set a valve's opening",
+                "requestBody": {
+                    "required": true,
+                    "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PositionCommand" } } }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The new position",
+                        "content": {
+                            "application/json": {
+                                "schema": { "type": "object", "properties": { "id": { "type": "string" }, "position": { "type": "number" }, "mode": { "type": "string" } } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": { "gatewayToken": { "type": "http", "scheme": "bearer" } },
+        "parameters": {
+            "ValveId": { "name": "id", "in": "path", "required": true, "description": "Valve tag", "schema": { "type": "string", "maxLength": 16 } }
+        },
+        "schemas": {
+            "ValveSummary": {
+                "type": "object",
+                "properties": { "id": { "type": "string" }, "state": { "$ref": "#/components/schemas/State" }, "position": { "type": "number" }, "internal": { "type": "string" } }
+            },
+            "Valve": {
+                "type": "object",
+                "required": ["id", "position", "state"],
+                "properties": {
+                    "id": { "type": "string" },
+                    "position": { "type": "number", "minimum": 0, "maximum": 150 },
+                    "state": { "$ref": "#/components/schemas/State" },
+                    "updatedAt": { "type": "string", "format": "date-time" },
+                    "internalNote": { "type": "string" }
+                }
+            },
+            "State": { "type": "string", "enum": ["open", "closed", "fault"] },
+            "PositionCommand": {
+                "type": "object",
+                "required": ["position", "mode"],
+                "properties": {
+                    "position": { "type": "number", "minimum": 0, "maximum": 150, "description": "Opening, percent of the travel" },
+                    "mode": { "type": "string", "enum": ["manual", "auto"] }
+                }
+            }
+        }
+    }
+}

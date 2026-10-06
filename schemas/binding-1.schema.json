@@ -87,7 +87,7 @@
       "required": ["domain", "namespace"],
       "properties": {
         "domain": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
-        "namespace": { "type": "string", "minLength": 1 }
+        "namespace": { "type": "string", "pattern": "^/\\S*[^/\\s]$", "description": "An absolute broker resource path: /site/nord." }
       }
     },
     "note": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "Why these choices. Shown to the Tier 4 operator, never sent to an MCP client." },

@@ -29,6 +29,7 @@ jobs:
             - run: npm ci
             - run: npm run format
             - run: npm run build
+            - run: npm run smoke
             - run: npm run typecheck
             - run: npm test
             - run: npm publish --access public --provenance

@@ -31,7 +31,16 @@ Converting OpenAPI to MCP is not new. A 300-operation spec does not make a good 
 ## Status
 
 - **Implemented**: the binding format (`binding-1`, JSON Schema and types) and the **engine**: a manifest served as a broker slot, interpreted without generating code, with argument validation (RE2 patterns), the broker's decision and engineering limits on every call, connection pooling, response size cap and projection. Tested end to end behind a real broker, and benchmarked (`bench/`).
-- **Not yet**: the compiler (OpenAPI spec + binding to manifest), signed manifests, the Tier 4 validation page, the MCP path for agents.
+- **Implemented**: the **compiler** (`@cyanmycelium/mcp-open-api/compiler`): OpenAPI 3.0 or 3.1 (JSON or YAML) plus a binding, into a canonical manifest and its SHA-256, with every diagnostic at once. A pure function; the manifest compiled from a spec behaves like a hand-written one behind the broker.
+- **Not yet**: Overlay and Arazzo inputs, MCP resources, a CLI, signed manifests, the Tier 4 validation page, the MCP path for agents.
+
+```ts
+import { compile } from "@cyanmycelium/mcp-open-api/compiler";
+import { serveManifest } from "@cyanmycelium/mcp-open-api";
+
+const { manifest, sha256, diagnostics } = compile({ binding, spec: specBytes });
+if (manifest) await serveManifest(tunnel, manifest, { principal, secrets });
+```
 
 Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.md) (French).
 

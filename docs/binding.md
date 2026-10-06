@@ -9,7 +9,7 @@ Overlay x-mcp-* (option)  ────┤
 Arazzo (réservé)          ────┘
 ```
 
-Statut : proposition, version 1 du format. Rien n'est encore implémenté.
+Statut : version 1 du format. Le schéma (`schemas/binding-1.schema.json`), les types et le compilateur sont implémentés ; l'Overlay, Arazzo et les ressources sont refusés par le compilateur tant qu'ils ne le sont pas, avec un diagnostic qui le dit.
 
 ## Principes
 
@@ -35,7 +35,7 @@ Statut : proposition, version 1 du format. Rien n'est encore implémenté.
     "instructions": "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
     "spec": { "path": "specs/ot-gateway.yaml", "sha256": "9f2c…" },
     "target": { "baseUrl": "https://ot-gw.local/api/v2", "auth": { "secretRef": "otGateway" }, "timeoutMs": 10000, "maxResponseBytes": 1048576 },
-    "governance": { "domain": "scada", "namespace": "nord" },
+    "governance": { "domain": "valves", "namespace": "/site/nord" },
     "tools": { "…": {} },
     "resources": { "…": {} },
     "arazzo": { "path": "workflows/vannes.arazzo.yaml", "sha256": "41ab…" }
@@ -85,7 +85,7 @@ Un binding couvre **une** spec et **un** slot.
     "output": { "pick": ["id", "position"] },
     "annotations": { "idempotentHint": true, "destructiveHint": false },
     "authorization": {
-        "capability": "scada.valve.write",
+        "capability": "valves.write",
         "resourcePath": "valves/{path.id}",
         "value": "body.position",
         "resultRequired": true
@@ -169,7 +169,7 @@ Une opération `GET` sans corps peut être exposée en ressource MCP plutôt qu'
     "name": "vanne",
     "description": "État d'une vanne du réseau Nord.",
     "output": { "pick": ["id", "position", "state", "updatedAt"] },
-    "authorization": { "capability": "scada.valve.read", "resourcePath": "valves/{path.id}" }
+    "authorization": { "capability": "valves.read", "resourcePath": "valves/{path.id}" }
 }
 ```
 
@@ -200,7 +200,7 @@ Un [Overlay 1.0](https://spec.openapis.org/overlay/v1.0.0.html) peut porter le b
                     "name": "lire_vanne",
                     "args": { "path.id": { "name": "vanne", "pattern": "^V-\\d{3}$" } },
                     "output": { "pick": ["id", "position", "state"] },
-                    "authorization": { "capability": "scada.valve.read", "resourcePath": "valves/{path.id}" }
+                    "authorization": { "capability": "valves.read", "resourcePath": "valves/{path.id}" }
                 }
             }
         }
@@ -224,7 +224,7 @@ Le format réserve dès la version 1 la place des outils à plusieurs appels. Le
         "name": "ouvrir_vanne_securisee",
         "description": "Vérifie que la vanne n'est pas verrouillée, puis fixe son ouverture.",
         "output": { "pick": ["id", "position"] },
-        "authorization": { "capability": "scada.valve.write", "resourcePath": "valves/{inputs.vanne}" }
+        "authorization": { "capability": "valves.write", "resourcePath": "valves/{inputs.vanne}" }
     }
 }
 ```
@@ -286,7 +286,7 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
         "timeoutMs": 10000,
         "maxResponseBytes": 1048576
     },
-    "governance": { "domain": "scada", "namespace": "nord" },
+    "governance": { "domain": "valves", "namespace": "/site/nord" },
     "tools": {
         "getValve": {
             "name": "lire_vanne",
@@ -296,13 +296,13 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
                 "query.debug": { "hide": true }
             },
             "output": { "pick": ["id", "position", "state", "updatedAt"] },
-            "authorization": { "capability": "scada.valve.read", "resourcePath": "valves/{path.id}" }
+            "authorization": { "capability": "valves.read", "resourcePath": "valves/{path.id}" }
         },
         "listValves": {
             "name": "lister_vannes",
             "description": "Liste les vannes du réseau Nord et leur état.",
             "output": { "pick": ["items[].id", "items[].state"], "maxItems": 50 },
-            "authorization": { "capability": "scada.valve.read", "resourcePath": "valves" }
+            "authorization": { "capability": "valves.read", "resourcePath": "valves" }
         },
         "setValvePosition": {
             "name": "ouvrir_vanne",
@@ -316,7 +316,7 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
             "output": { "pick": ["id", "position"] },
             "annotations": { "idempotentHint": true, "destructiveHint": false },
             "authorization": {
-                "capability": "scada.valve.write",
+                "capability": "valves.write",
                 "resourcePath": "valves/{path.id}",
                 "value": "body.position",
                 "resultRequired": true
@@ -328,7 +328,7 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
             "uri": "valve://nord/{path.id}",
             "name": "vanne",
             "output": { "pick": ["id", "position", "state", "updatedAt"] },
-            "authorization": { "capability": "scada.valve.read", "resourcePath": "valves/{path.id}" }
+            "authorization": { "capability": "valves.read", "resourcePath": "valves/{path.id}" }
         }
     }
 }

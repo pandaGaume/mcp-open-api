@@ -6,7 +6,10 @@ const source = (path: string) => fileURLToPath(new URL(`./src/${path}`, import.m
 // Tests run against the sources: no build needed.
 export default defineConfig({
     resolve: {
-        alias: [{ find: /^@cyanmycelium\/mcp-open-api$/, replacement: source("index.ts") }],
+        alias: [
+            { find: "@cyanmycelium/mcp-open-api/compiler", replacement: source("compiler/index.ts") },
+            { find: /^@cyanmycelium\/mcp-open-api$/, replacement: source("index.ts") },
+        ],
     },
     test: {
         include: ["tests/**/*.test.ts"],

@@ -21,6 +21,8 @@ jobs:
             - run: npm ci
             - run: npm run format
             - run: npm run build
+            # Loads the built entries with plain Node: vitest resolves imports Node's ESM loader refuses.
+            - run: npm run smoke
             # Type-checks the test files too, which `build` skips and vitest never verifies.
             - run: npm run typecheck
             - run: npm test

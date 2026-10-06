@@ -2,7 +2,19 @@
 
 Le compilateur transforme un binding et sa spec en **manifeste** : un plan d'exécution figé, que l'opérateur Tier 4 approuve et que le broker exécute. Ce document décrit la compilation, le format du manifeste, son exécution dans le broker, et comment on certifie ce qui s'exécute.
 
-Statut : proposition. Rien n'est encore implémenté. Le format du binding est dans [binding.md](binding.md).
+Le format du binding est dans [binding.md](binding.md).
+
+**État (2026-10-06).** Implémentés : le compilateur (`src/compiler/`, entrée `@cyanmycelium/mcp-open-api/compiler`) et le moteur (`src/runtime/`). Le manifeste compilé depuis la spec OpenAPI de l'API de vannes de test est servi derrière un vrai broker 1.7.0 et se comporte comme le manifeste écrit à la main (`tests/compiler.test.ts`). Pas encore : l'Overlay, Arazzo, les ressources MCP, la CLI, la signature des manifestes, la seconde sortie `.mcpb`.
+
+Limites de la version 1 du compilateur, chacune signalée par un diagnostic, jamais ignorée en silence :
+
+- mots-clés de validation que le moteur ne vérifie pas encore : `multipleOf`, `uniqueItems`, `minProperties`, `maxProperties`, `patternProperties`, `propertyNames`, `dependentRequired`, `if` / `then` / `else`, `not`, `prefixItems`, `contains`, `unevaluated*`. Les retirer élargirait le schéma : c'est une erreur (`schema.unsupported-keyword`) ;
+- paramètres : styles par défaut seulement (`simple` pour le chemin et les en-têtes, `form` éclaté pour la query), pas d'objet en query, pas de paramètre décrit par `content`, pas de cookie obligatoire ;
+- corps : JSON seulement ; une valeur imbriquée (`body.a.b`) ne peut être que fixée ;
+- authentification : `bearer`, `basic`, `apiKey` en en-tête ou en query ; pas encore OAuth 2 ni OpenID Connect ;
+- les mots-clés `format`, `xml`, `example`, `discriminator`, `readOnly`, `writeOnly` sont retirés : ce sont des annotations. Une propriété `readOnly` quitte le schéma d'entrée, une propriété `writeOnly` celui de sortie.
+
+La forme canonique trie les clés des objets : les propriétés d'un `inputSchema` sortent dans l'ordre alphabétique, pas dans celui de la spec. L'ordre des `required`, un tableau, est conservé.
 
 ## En une phrase
 

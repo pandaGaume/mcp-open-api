@@ -14,7 +14,7 @@ export const vannes: IBinding = {
         timeoutMs: 10000,
         maxResponseBytes: 1048576,
     },
-    governance: { domain: "scada", namespace: "nord" },
+    governance: { domain: "valves", namespace: "/site/nord" },
     tools: {
         getValve: {
             name: "lire_vanne",
@@ -24,13 +24,13 @@ export const vannes: IBinding = {
                 "query.debug": { hide: true },
             },
             output: { pick: ["id", "position", "state", "updatedAt"] },
-            authorization: { capability: "scada.valve.read", resourcePath: "valves/{path.id}" },
+            authorization: { capability: "valves.read", resourcePath: "valves/{path.id}" },
         },
         listValves: {
             name: "lister_vannes",
             description: "Liste les vannes du réseau Nord et leur état.",
             output: { pick: ["items[].id", "items[].state"], maxItems: 50 },
-            authorization: { capability: "scada.valve.read", resourcePath: "valves" },
+            authorization: { capability: "valves.read", resourcePath: "valves" },
         },
         setValvePosition: {
             name: "ouvrir_vanne",
@@ -44,7 +44,7 @@ export const vannes: IBinding = {
             output: { pick: ["id", "position"] },
             annotations: { idempotentHint: true, destructiveHint: false },
             authorization: {
-                capability: "scada.valve.write",
+                capability: "valves.write",
                 resourcePath: "valves/{path.id}",
                 value: "body.position",
                 resultRequired: true,
@@ -56,7 +56,7 @@ export const vannes: IBinding = {
             uri: "valve://nord/{path.id}",
             name: "vanne",
             output: { pick: ["id", "position", "state", "updatedAt"] },
-            authorization: { capability: "scada.valve.read", resourcePath: "valves/{path.id}" },
+            authorization: { capability: "valves.read", resourcePath: "valves/{path.id}" },
         },
     },
 };
