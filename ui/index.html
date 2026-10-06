@@ -16,7 +16,7 @@
             <form id="connect" class="inline">
                 <label class="grow">
                     <span class="sr">Operator token</span>
-                    <input id="token" type="password" autocomplete="off" placeholder="Operator token (empty when the broker has no client auth)" />
+                    <input id="token" type="password" autocomplete="off" placeholder="Token: leave empty when the broker has no client auth" />
                 </label>
                 <button type="submit">Connect</button>
             </form>
@@ -26,16 +26,35 @@
         <main>
             <section id="step-source" class="card">
                 <h2><span class="num">1</span> Source</h2>
-                <p class="muted">The page reads the spec from your disk and sends its text. The designer never fetches a spec by URL.</p>
+                <div id="connection-help" class="notice" hidden></div>
                 <form id="import" class="grid">
                     <label
-                        >Host
-                        <select id="host" required></select
-                    ></label>
-                    <label>Slot <input id="slot" required pattern="^[a-z][a-z0-9\-]{0,47}$" placeholder="vannes" /></label>
-                    <label class="wide">OpenAPI 3.0 or 3.1, JSON or YAML <input id="spec-file" type="file" accept=".json,.yaml,.yml" required /></label>
+                        >Served by (host)
+                        <select id="host" required>
+                            <option value="">connect first</option>
+                        </select>
+                        <span class="help">The mcp-open-api process that will run this API: it holds the API's secrets and allowed targets, and serves what is signed.</span>
+                        <span id="host-details" class="help mono"></span>
+                    </label>
+                    <label
+                        >Published as (slot)
+                        <input id="slot" required pattern="^[a-z][a-z0-9\-]{0,47}$" placeholder="vannes" />
+                        <span class="help">The name clients and agents see on the broker. Lowercase, digits and dashes.</span>
+                        <span id="slot-details" class="help mono"></span>
+                    </label>
+                    <label class="wide"
+                        >From a URL: the spec, or a documentation page (Swagger UI, ReDoc) that loads it
+                        <input id="spec-url" type="url" placeholder="https://petstore3.swagger.io/" />
+                        <span id="spec-origins" class="muted"></span>
+                    </label>
+                    <label class="wide">Or from a file, JSON or YAML <input id="spec-file" type="file" accept=".json,.yaml,.yml" /></label>
+                    <details class="wide">
+                        <summary>Or paste it</summary>
+                        <textarea id="spec-text" rows="6" spellcheck="false" placeholder="openapi: 3.1.0 ..."></textarea>
+                    </details>
                     <button type="submit" disabled>Import</button>
                 </form>
+                <p class="muted">OpenAPI 3.0 and 3.1 only. A Swagger 2.0 description must be converted first.</p>
                 <div id="hosts"></div>
             </section>
 

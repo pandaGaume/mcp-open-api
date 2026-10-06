@@ -21,6 +21,12 @@ export interface IDesignerConfig {
     readonly hosts: Readonly<Record<string, string>>;
     readonly maxDrafts?: number;
     readonly maxSpecBytes?: number;
+    /**
+     * Origins a spec may be fetched from by URL, besides each host's
+     * `allowedTargets`: a documentation portal on another origin than the API.
+     * No other origin is ever contacted.
+     */
+    readonly specOrigins?: readonly string[];
 }
 
 /** Reads a designer config and the host configs it names. */
@@ -60,14 +66,19 @@ export const DESIGNER_TOOLS: readonly McpTool[] = [
     },
     {
         name: "designer_import",
-        description: "Imports an OpenAPI 3.0 or 3.1 spec (JSON or YAML text) into a new draft for a slot of a host. Every operation becomes a candidate; none is exposed yet.",
+        description:
+            "Imports an OpenAPI 3.0 or 3.1 spec into a new draft for a slot of a host, from its text or from a URL. A URL may be the spec itself or a documentation page (Swagger UI, ReDoc) that loads it. Every operation becomes a candidate; none is exposed yet.",
         inputSchema: object(
             {
                 host: { type: "string", description: "A host from designer_hosts." },
                 slot: { type: "string", pattern: "^[a-z][a-z0-9-]{0,47}$", description: "The slot the API will be published on." },
-                spec: { type: "string", description: "The spec's text. The designer never fetches a spec by URL." },
+                spec: { type: "string", description: "The spec's text (JSON or YAML). Give this or url." },
+                url: {
+                    type: "string",
+                    description: "Where to fetch the spec. Only the host's allowedTargets and the designer's specOrigins (designer_hosts lists them) are contacted.",
+                },
             },
-            ["host", "slot", "spec"]
+            ["host", "slot"]
         ),
     },
     {
@@ -144,7 +155,13 @@ class DesignerAdapter extends McpAdapterBase {
                 case "designer_hosts":
                     return ok({ hosts: w.hosts() });
                 case "designer_import":
-                    return ok(w.importSpec({ host: s("host"), slot: s("slot"), spec: s("spec") }));
+                    if ((args.spec === undefined) === (args.url === undefined))
+                        return refused(new DesignerError("invalid_arguments", "give the spec's text or its url, one of them"));
+                    return ok(
+                        args.url !== undefined
+                            ? await w.importUrl({ host: s("host"), slot: s("slot"), url: s("url") })
+                            : w.importSpec({ host: s("host"), slot: s("slot"), spec: s("spec") })
+                    );
                 case "designer_get":
                     return ok(w.view(s("draftId")));
                 case "designer_update":
@@ -206,6 +223,7 @@ export async function startDesigner(
     const workbench = new Workbench(hosts, {
         ...(config.maxDrafts ? { maxDrafts: config.maxDrafts } : {}),
         ...(config.maxSpecBytes ? { maxSpecBytes: config.maxSpecBytes } : {}),
+        ...(config.specOrigins ? { specOrigins: config.specOrigins } : {}),
         ...(options.onPublish ? { onPublish: options.onPublish } : {}),
     });
     const transport = MultiplexTransport.create(slot, config.broker.url, secret ? { secret } : {});

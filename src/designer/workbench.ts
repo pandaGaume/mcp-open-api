@@ -12,6 +12,10 @@ import type { IHostConfig } from "../host/host";
 import { signatureProblem, trustedKeysFrom } from "../host/signature";
 import type { IManifest, IManifestTool } from "../manifest/manifest.types";
 import { ManifestEngine, ManifestLoadError, type IPlannedRequest } from "../runtime/engine";
+import { DesignerError } from "./errors";
+import { fetchSpec } from "./fetch-spec";
+
+export { DesignerError } from "./errors";
 
 /** A host the designer publishes into: its configuration, as the host itself reads it. */
 export interface IDesignHost {
@@ -26,6 +30,12 @@ export interface IWorkbenchOptions {
     readonly maxDrafts?: number;
     /** Largest spec accepted, in bytes. Default 5 MB. */
     readonly maxSpecBytes?: number;
+    /**
+     * Origins a spec may be fetched from by URL, besides each host's
+     * `allowedTargets` (a docs portal on another origin than the API). The
+     * designer contacts no other origin, redirects included.
+     */
+    readonly specOrigins?: readonly string[];
     /** Each publication, for the audit trail. */
     readonly onPublish?: (event: IPublishEvent) => void;
 }
@@ -56,7 +66,7 @@ export interface IOperationView {
 export interface IDraftView {
     readonly draftId: string;
     readonly host: string;
-    readonly spec: { readonly title?: string; readonly version?: string; readonly openapi: string; readonly sha256: string };
+    readonly spec: { readonly title?: string; readonly version?: string; readonly openapi: string; readonly sha256: string; readonly source?: string };
     readonly operations: readonly IOperationView[];
     readonly binding: IBinding;
 }
@@ -104,21 +114,11 @@ export interface IPublishResult {
     readonly next: string;
 }
 
-/** A refusal of the designer, with every reason. */
-export class DesignerError extends Error {
-    constructor(
-        readonly code: string,
-        message: string,
-        readonly problems: readonly string[] = []
-    ) {
-        super(problems.length > 0 ? `${message}:\n- ${problems.join("\n- ")}` : message);
-        this.name = "DesignerError";
-    }
-}
-
 interface IDraft {
     readonly id: string;
     readonly host: IResolvedHost;
+    /** The URL the spec was fetched from, when it was. */
+    readonly source?: string;
     readonly specText: string;
     readonly specSha: string;
     readonly specExt: "json" | "yaml";
@@ -170,12 +170,23 @@ export class Workbench {
             allowedTargets: h.config.allowedTargets,
             secrets: Object.keys(h.config.secrets ?? {}),
             trustedKeys: h.trustedKeys.length,
+            specOrigins: this._specOrigins(h),
             published: this._published(h),
         }));
     }
 
+    /**
+     * Fetches a spec by URL, from an allowed origin only, then imports it. A
+     * documentation page (Swagger UI, ReDoc) is searched for the spec it loads.
+     */
+    async importUrl(input: { readonly host: string; readonly slot: string; readonly url: string }): Promise<IDraftView> {
+        const host = this._host(input.host);
+        const fetched = await fetchSpec(input.url, { allowedOrigins: this._specOrigins(host), maxBytes: this._maxSpecBytes });
+        return this.importSpec({ host: input.host, slot: input.slot, spec: fetched.text, source: fetched.url });
+    }
+
     /** Reads a spec and opens a draft on it: every operation is a candidate, none is exposed yet. */
-    importSpec(input: { readonly host: string; readonly slot: string; readonly spec: string }): IDraftView {
+    importSpec(input: { readonly host: string; readonly slot: string; readonly spec: string; readonly source?: string }): IDraftView {
         const host = this._host(input.host);
         if (!SLOT_NAME.test(input.slot)) throw new DesignerError("invalid_slot", `"${input.slot}" is not a slot name (^[a-z][a-z0-9-]{0,47}$)`);
         const bytes = Buffer.byteLength(input.spec, "utf8");
@@ -198,7 +209,7 @@ export class Workbench {
 
         const specSha = sha256(input.spec);
         const specExt = input.spec.trimStart().startsWith("{") ? "json" : "yaml";
-        const baseUrl = suggestBaseUrl(spec, host.config.allowedTargets);
+        const baseUrl = suggestBaseUrl(spec, host.config.allowedTargets, input.source);
         const secretNames = Object.keys(host.config.secrets ?? {});
         const schemes = isObject(spec.doc.components) && isObject(spec.doc.components.securitySchemes) ? Object.keys(spec.doc.components.securitySchemes) : [];
         const info = isObject(spec.doc.info) ? spec.doc.info : {};
@@ -214,7 +225,17 @@ export class Workbench {
             },
             tools: {},
         };
-        const draft: IDraft = { id: randomUUID(), host, specText: input.spec, specSha, specExt, spec, binding, touched: Date.now() };
+        const draft: IDraft = {
+            id: randomUUID(),
+            host,
+            ...(input.source ? { source: input.source } : {}),
+            specText: input.spec,
+            specSha,
+            specExt,
+            spec,
+            binding,
+            touched: Date.now(),
+        };
         this._drafts.set(draft.id, draft);
         this._evict();
         return this._view(draft);
@@ -380,6 +401,11 @@ export class Workbench {
         }
     }
 
+    /** Where a spec for this host may be fetched from: its API's origins, and the designer's spec origins. */
+    private _specOrigins(host: IResolvedHost): string[] {
+        return [...new Set([...host.config.allowedTargets, ...(this._options.specOrigins ?? [])])];
+    }
+
     private _host(name: string): IResolvedHost {
         const host = this._hosts.get(name);
         if (!host) throw new DesignerError("unknown_host", `no host "${name}"; known: ${[...this._hosts.keys()].join(", ") || "none"}`);
@@ -410,6 +436,7 @@ export class Workbench {
                 ...(typeof info.version === "string" ? { version: info.version } : {}),
                 openapi: String(draft.spec.doc.openapi),
                 sha256: draft.specSha,
+                ...(draft.source ? { source: draft.source } : {}),
             },
             operations: [...draft.spec.operations.values()].map((op) => ({
                 key: op.key,
@@ -426,16 +453,20 @@ export class Workbench {
     }
 }
 
-/** The spec's first server, when the host allows its origin; else the host's first allowed target. */
-function suggestBaseUrl(spec: Spec, allowedTargets: readonly string[]): string {
+/**
+ * The spec's first server the host allows; else the host's first allowed
+ * target. A relative server URL (`/api/v3`) is relative to where the spec was
+ * fetched from, and says nothing when it was uploaded.
+ */
+function suggestBaseUrl(spec: Spec, allowedTargets: readonly string[], source?: string): string {
     const servers = Array.isArray(spec.doc.servers) ? spec.doc.servers : [];
     for (const server of servers) {
         if (!isObject(server) || typeof server.url !== "string") continue;
         try {
-            const url = new URL(server.url);
+            const url = new URL(server.url, source);
             if (allowedTargets.includes(url.origin)) return url.href.replace(/\/$/, "");
         } catch {
-            // a relative server URL says nothing about the origin
+            // a relative server URL without a source says nothing about the origin
         }
     }
     return allowedTargets[0] ?? "https://example.invalid";

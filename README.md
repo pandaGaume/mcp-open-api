@@ -68,11 +68,14 @@ npx @cyanmycelium/mcp-open-api design --config designer.json
 ```json
 {
     "broker": { "url": "ws://broker.local:3000/providers", "secretEnv": "DESIGNER_PROVIDER_SECRET" },
-    "hosts": { "vannes": "../vannes/mcp-open-api.json" }
+    "hosts": { "vannes": "../vannes/mcp-open-api.json" },
+    "specOrigins": ["https://docs.example.com"]
 }
 ```
 
-The command prints the static mount to add to the broker's `config.json` (`www.mounts`, under `/ui/designer`); the broker's own origin must be in `allowedOrigins`. Open `/ui/designer/` on the broker, connect with your token, and go: source, selection, tuning, checks, dry run, review. Publishing writes `<slot>.json`, its `.sig` and the sources (`sources/<slot>.binding.json`, the spec) into the host's folder; restart that host to serve it.
+The command prints the static mount to add to the broker's `config.json` (`www.mounts`, under `/ui/designer`); the broker's own origin must be in `allowedOrigins`. Open `/ui/designer/` on the broker, connect with your token, and go: source, selection, tuning, checks, dry run, review.
+
+A spec can come from a file, pasted text, or a URL. The URL may be the spec itself or a documentation page (Swagger UI, ReDoc, Scalar): the designer looks for the spec the page loads, then at the usual places (`/openapi.json`, `/v3/api-docs`, `/swagger.json`, ...). It fetches only from the host's `allowedTargets` and from `specOrigins`, redirects included, so it cannot be turned into a way to reach any address its network can. Swagger 2.0 is recognized and refused with a pointer to a converter. Publishing writes `<slot>.json`, its `.sig` and the sources (`sources/<slot>.binding.json`, the spec) into the host's folder; restart that host to serve it.
 
 The page signs in the browser, with an Ed25519 PKCS#8 key from `mcp-open-api keygen`; its public half must be in the host's `trustedKeys`. Every design tool is also reachable over MCP; `designer_publish` refuses anything without that signature.
 

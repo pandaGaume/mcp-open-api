@@ -1,4 +1,6 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -153,6 +155,96 @@ describe("the workbench", () => {
     it("ships the Tier 4 page", () => {
         for (const file of ["index.html", "designer.js", "designer.css"]) expect(existsSync(join(DESIGNER_UI_DIR, file))).toBe(true);
         expect(readFileSync(join(DESIGNER_UI_DIR, "index.html"), "utf8")).not.toMatch(/<script>|style="/);
+    });
+});
+
+describe("importing by URL", () => {
+    type Route = (res: ServerResponse) => void;
+    const json =
+        (body: unknown): Route =>
+        (res) => (res.writeHead(200, { "content-type": "application/json" }), res.end(typeof body === "string" ? body : JSON.stringify(body)));
+    const html =
+        (body: string): Route =>
+        (res) => (res.writeHead(200, { "content-type": "text/html" }), res.end(body));
+    const redirect =
+        (to: string): Route =>
+        (res) => (res.writeHead(302, { location: to }), res.end());
+    const servers: Server[] = [];
+    const serve = async (routes: Record<string, Route>): Promise<{ origin: string; hits: string[] }> => {
+        const hits: string[] = [];
+        const server = createServer((req, res) => {
+            hits.push(req.url!);
+            const route = routes[req.url!];
+            if (route) route(res);
+            else (res.writeHead(404), res.end());
+        });
+        await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+        servers.push(server);
+        return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits };
+    };
+    const relative = JSON.parse(valveSpec);
+    relative.servers = [{ url: "/api/v2" }];
+
+    let docs: { origin: string; hits: string[] };
+    let elsewhere: { origin: string; hits: string[] };
+    beforeAll(async () => {
+        elsewhere = await serve({ "/openapi.json": json(valveSpec) });
+        docs = await serve({
+            "/spec.json": json(valveSpec),
+            "/relative.json": json(relative),
+            "/ui/": html('<html><script src="./swagger-ui-bundle.js"></script><script src="./swagger-initializer.js"></script></html>'),
+            "/ui/swagger-initializer.js": json('window.ui = SwaggerUIBundle({ url: "/spec.json", dom_id: "#swagger-ui" });'),
+            "/redoc/": html('<html><redoc spec-url="../relative.json"></redoc></html>'),
+            "/portal/": html("<html><body>API reference</body></html>"),
+            "/openapi.json": json(valveSpec),
+            "/legacy/": html("<html></html>"),
+            "/legacy/swagger.json": json({ swagger: "2.0", info: { title: "old", version: "1" }, paths: {} }),
+            "/away": redirect(`${elsewhere.origin}/openapi.json`),
+            "/big.json": json(`{"openapi":"3.1.0","x":"${"a".repeat(2048)}"}`),
+        });
+    });
+    afterAll(() => {
+        for (const s of servers) s.close();
+    });
+
+    const bench = (specOrigins: string[] = [docs.origin], maxSpecBytes?: number): Workbench => {
+        const host = hostFolder(api);
+        return new Workbench([host], { specOrigins, ...(maxSpecBytes ? { maxSpecBytes } : {}) });
+    };
+    const code = async (p: Promise<unknown>): Promise<string> =>
+        p.then(
+            () => "accepted",
+            (e: DesignerError) => e.code
+        );
+
+    it("fetches a spec, and resolves its relative servers against where it came from", async () => {
+        const draft = await bench([docs.origin, new URL(api.baseUrl).origin]).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/spec.json` });
+        expect(draft.spec.source).toBe(`${docs.origin}/spec.json`);
+        expect(draft.operations.map((o) => o.key).sort()).toEqual(["getValve", "listValves", "setValvePosition"]);
+    });
+
+    it("finds the spec behind a Swagger UI page, a ReDoc page, or at a well-known path", async () => {
+        const b = bench();
+        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/ui/` })).spec.source).toBe(`${docs.origin}/spec.json`);
+        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/redoc/` })).spec.source).toBe(`${docs.origin}/relative.json`);
+        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/portal/` })).spec.source).toBe(`${docs.origin}/openapi.json`);
+    });
+
+    it("says so when it finds only Swagger 2.0", async () => {
+        const b = bench();
+        await expect(b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/legacy/swagger.json` })).rejects.toThrow(/Swagger 2\.0/);
+    });
+
+    it("contacts no origin outside the host's targets and the spec origins, redirects included", async () => {
+        const before = elsewhere.hits.length;
+        expect(await code(bench([]).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/spec.json` }))).toBe("origin_not_allowed");
+        expect(await code(bench().importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/away` }))).toBe("origin_not_allowed");
+        expect(await code(bench().importUrl({ host: "vannes", slot: "vannes", url: "file:///etc/passwd" }))).toBe("invalid_url");
+        expect(elsewhere.hits.length).toBe(before);
+    });
+
+    it("caps the size of what it reads", async () => {
+        expect(await code(bench([docs.origin], 1024).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/big.json` }))).toBe("spec_too_large");
     });
 });
 

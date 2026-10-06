@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startTestBroker } from "@cyanmycelium/mcp-broker/testing";
+import { WsTunnelBuilder } from "@cyanmycelium/mcp-broker";
 import { DESIGNER_UI_DIR, startDesigner } from "../dist/designer/index.js";
 import { generateSigningKeys } from "../dist/host/index.js";
 
@@ -19,12 +19,26 @@ const valves = new Map([
     ["V-001", { id: "V-001", position: 0, state: "closed" }],
     ["V-012", { id: "V-012", position: 35, state: "open" }],
 ]);
+// Its documentation, as many APIs publish it: a Swagger UI page that loads the spec.
+const docsPage = `<!doctype html><html><head><title>OT gateway</title></head><body><div id="swagger-ui"></div>
+<script src="swagger-ui-bundle.js"></script><script src="swagger-initializer.js"></script></body></html>`;
+const initializer = `window.onload = () => { window.ui = SwaggerUIBundle({ url: "/api/v2/openapi.json", dom_id: "#swagger-ui" }); };`;
+let spec;
 const api = createServer((req, res) => {
     const send = (status, body) => {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
     };
     const url = new URL(req.url, "http://api");
+    if (url.pathname === "/api/v2/openapi.json") return send(200, spec);
+    if (url.pathname === "/docs/" || url.pathname === "/docs") {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(docsPage);
+    }
+    if (url.pathname === "/docs/swagger-initializer.js") {
+        res.writeHead(200, { "content-type": "text/javascript" });
+        return res.end(initializer);
+    }
     const m = /^\/api\/v2\/valves(?:\/([^/]+))?(\/position)?$/.exec(url.pathname);
     if (!m) return send(404, { title: "not found" });
     if (req.method === "GET" && !m[1]) return send(200, { items: [...valves.values()] });
@@ -41,20 +55,16 @@ const api = createServer((req, res) => {
 await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve));
 const apiOrigin = `http://127.0.0.1:${api.address().port}`;
 
-const broker = await startTestBroker({
-    callers: { operator: { groups: ["operators"] } },
-    providers: { "openapi-designer": {} },
-    policy: {
-        slotResources: { designer: "/designer" },
-        roles: { designer: { capabilities: ["mcp.tools.call", "mcp.tools.list"] } },
-        assignments: [{ id: "designers", subject: "group:operators", role: "designer", resource: "/designer" }],
-    },
-    configure: (builder) =>
-        builder
-            .withPort(port)
-            .withAllowedOrigins([`http://127.0.0.1:${port}`, `http://localhost:${port}`])
-            .withStaticMount("/ui/designer", DESIGNER_UI_DIR),
-});
+// A broker without client authentication: on one machine, for a demo, the
+// page needs no token. A real deployment authenticates its operators.
+const broker = new WsTunnelBuilder()
+    .withPort(port)
+    .withHost("127.0.0.1")
+    .withAllowedOrigins([`http://127.0.0.1:${port}`, `http://localhost:${port}`])
+    .withStaticMount("/ui/designer", DESIGNER_UI_DIR)
+    .build();
+await broker.start();
+const providersUrl = `ws://127.0.0.1:${port}/providers`;
 
 // The host folder the designer publishes into, and the operator's key.
 const work = mkdtempSync(join(tmpdir(), "mcp-open-api-demo-"));
@@ -62,7 +72,7 @@ mkdirSync(join(work, "manifests"));
 const keys = generateSigningKeys();
 writeFileSync(join(work, "operator.pem"), keys.privateKeyPem);
 writeFileSync(join(work, "operator.pub.pem"), keys.publicKeyPem);
-const spec = {
+spec = {
     openapi: "3.1.0",
     info: { title: "OT gateway, valves", version: "2.0.0" },
     servers: [{ url: `${apiOrigin}/api/v2` }],
@@ -128,21 +138,32 @@ const host = {
     name: "vannes",
     baseDir: work,
     config: {
-        broker: { url: broker.providersUrl },
+        broker: { url: providersUrl },
         manifests: "manifests",
         trustedKeys: ["operator.pub.pem"],
         allowedTargets: [apiOrigin],
         secrets: { otGateway: { env: "VANNES_API_TOKEN" } },
     },
 };
-const designer = await startDesigner({ broker: { url: broker.providersUrl, secretEnv: "SECRET" } }, [host], {
-    env: { SECRET: broker.providerSecret("openapi-designer") },
+// A second host, for a public API: the Swagger petstore, which needs no credential.
+mkdirSync(join(work, "petstore"));
+const petstore = {
+    name: "petstore",
+    baseDir: work,
+    config: {
+        broker: { url: providersUrl },
+        manifests: "petstore",
+        trustedKeys: ["operator.pub.pem"],
+        allowedTargets: ["https://petstore3.swagger.io"],
+    },
+};
+const designer = await startDesigner({ broker: { url: providersUrl } }, [host, petstore], {
     onPublish: (event) => console.log(`published ${JSON.stringify(event)}`),
 });
 
 console.log(`page:      http://127.0.0.1:${port}/ui/designer/`);
-console.log(`token:     operator`);
-console.log(`spec:      ${join(work, "valves.openapi.json")}`);
+console.log(`spec URLs: ${apiOrigin}/docs/ (host vannes), https://petstore3.swagger.io/ (host petstore)`);
+console.log(`spec file: ${join(work, "valves.openapi.json")}`);
 console.log(`key:       ${join(work, "operator.pem")}`);
 console.log(`host dir:  ${join(work, "manifests")}`);
 

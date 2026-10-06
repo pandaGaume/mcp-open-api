@@ -137,7 +137,7 @@ function problemList(error) {
 
 // ── 1. Connect and import ───────────────────────────────────────────────────
 
-$("slot-label").textContent = `slot ${SLOT}`;
+$("slot-label").textContent = `talks to /${SLOT}/mcp`;
 $("token").value = sessionStorageGet("designer-token") ?? "";
 
 function sessionStorageGet(key) {
@@ -156,8 +156,15 @@ function sessionStorageSet(key, value) {
     }
 }
 
-$("connect").addEventListener("submit", async (event) => {
-    event.preventDefault();
+/** Says what to do while the page is not connected: an empty host list is never left unexplained. */
+function help(kind, ...content) {
+    const box = $("connection-help");
+    box.hidden = content.length === 0;
+    box.className = `notice ${kind}`;
+    box.replaceChildren(...content);
+}
+
+async function connect() {
     state.mcp?.close();
     const token = $("token").value.trim();
     sessionStorageSet("designer-token", token);
@@ -169,17 +176,58 @@ $("connect").addEventListener("submit", async (event) => {
         state.hosts = hosts;
         renderHosts();
         setStatus("connected", "on");
+        help("ok");
         $("import").querySelector("button").disabled = false;
     } catch (error) {
         setStatus("not connected", "off");
-        $("hosts").replaceChildren(problemList(error));
+        $("import").querySelector("button").disabled = true;
+        const refused = /HTTP 401|HTTP 403/.test(error.message);
+        help(
+            "error",
+            el("strong", {}, refused ? "The broker refused the page. " : `No designer answers on the slot "${SLOT}". `),
+            el("span", {}, error.message),
+            el(
+                "ul",
+                {},
+                refused
+                    ? [
+                          el(
+                              "li",
+                              {},
+                              "This broker authenticates its clients: paste the access token its authorization server issued you above, then Connect. A broker run without client auth (no auth section in its config, as in development) needs none."
+                          ),
+                          el("li", {}, `List ${location.origin} in the broker's allowedOrigins.`),
+                      ]
+                    : [
+                          el("li", {}, "Start the designer: mcp-open-api design --config designer.json"),
+                          el("li", {}, "The host list comes from the hosts of that designer.json, each the path of a host's mcp-open-api.json."),
+                          el("li", {}, "To try it all on one machine: npm run build && npm run demo:designer, in the mcp-open-api repo."),
+                      ]
+            )
+        );
     }
+}
+
+$("connect").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void connect();
 });
 
 addEventListener("pagehide", () => state.mcp?.close());
 
+// Connect on arrival: the page is useless until it is, and most often no token is needed or one is remembered.
+if (location.protocol === "file:") {
+    setStatus("not connected", "off");
+    help(
+        "error",
+        el("strong", {}, "Open this page through the broker, not from the disk. "),
+        el("span", {}, "It talks to the designer at /designer/mcp on the broker's origin: http://<broker>/ui/designer/")
+    );
+} else void connect();
+
 function renderHosts() {
     $("host").replaceChildren(...state.hosts.map((h) => el("option", { value: h.name }, h.name)));
+    renderSpecOrigins();
     $("hosts").replaceChildren(
         el(
             "div",
@@ -212,13 +260,55 @@ function renderHosts() {
     );
 }
 
+/** The origins the designer may fetch a spec from, for the chosen host. */
+/** What the chosen host allows, and what the chosen slot name will be: the two are easy to mix up. */
+function renderSpecOrigins() {
+    const host = state.hosts.find((h) => h.name === $("host").value);
+    $("spec-origins").textContent = host ? `The designer fetches only from: ${host.specOrigins.join(", ")}` : "";
+    $("host-details").textContent = host
+        ? `calls ${host.allowedTargets.join(", ") || "nothing yet"}; secrets: ${host.secrets.join(", ") || "none"}; ${host.trustedKeys} trusted key${host.trustedKeys === 1 ? "" : "s"}`
+        : "";
+    renderSlotDetails();
+}
+
+function renderSlotDetails() {
+    const host = state.hosts.find((h) => h.name === $("host").value);
+    const slot = $("slot").value.trim();
+    if (!slot) {
+        $("slot-details").textContent = "";
+        return;
+    }
+    const published = host?.published.find((p) => p.slot === slot);
+    $("slot-details").textContent =
+        `${location.origin}/${slot}/mcp${published ? `; already published by this host (${published.sha256.slice(0, 12)}): publishing replaces it` : ""}`;
+}
+
+$("host").addEventListener("change", renderSpecOrigins);
+$("slot").addEventListener("input", renderSlotDetails);
+
 $("import").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const url = $("spec-url").value.trim();
     const file = $("spec-file").files[0];
-    if (!file) return;
+    const pasted = $("spec-text").value.trim();
+    const base = { host: $("host").value, slot: $("slot").value.trim() };
+    const button = $("import").querySelector("button");
     try {
-        const spec = await file.text();
-        const draft = await state.mcp.tool("designer_import", { host: $("host").value, slot: $("slot").value.trim(), spec });
+        let args;
+        if (url) args = { ...base, url };
+        else if (file) args = { ...base, spec: await file.text() };
+        else if (pasted) args = { ...base, spec: pasted };
+        else throw new Error("give a URL, a file or the spec's text");
+        button.disabled = true;
+        button.textContent = url ? "Fetching..." : "Importing...";
+        const draft = await state.mcp.tool("designer_import", args);
+        $("hosts").replaceChildren(
+            el(
+                "p",
+                { class: "muted" },
+                `Imported ${draft.spec.title ?? "the spec"} ${draft.spec.version ?? ""} (OpenAPI ${draft.spec.openapi})${draft.spec.source ? ` from ${draft.spec.source}` : ""}.`
+            )
+        );
         state.draft = draft;
         state.binding = structuredClone(draft.binding);
         state.approvals.clear();
@@ -229,6 +319,9 @@ $("import").addEventListener("submit", async (event) => {
         await update();
     } catch (error) {
         $("hosts").replaceChildren(problemList(error));
+    } finally {
+        button.disabled = !state.mcp?.session;
+        button.textContent = "Import";
     }
 });
 
