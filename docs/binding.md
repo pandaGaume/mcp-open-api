@@ -1,28 +1,28 @@
-# Le binding : format `binding-1`
+# The binding: the `binding-1` format
 
-Le binding dit quelles opérations d'une spec OpenAPI deviennent un slot MCP, et comment chacune est traduite. C'est le seul fichier qu'on écrit. Le compilateur de mcp-open-api le combine avec la spec pour produire le **manifeste** : l'artefact figé que l'opérateur Tier 4 valide, que le broker hache et qu'il exécute.
+The binding says which operations of an OpenAPI spec become an MCP slot, and how each one is translated. It is the only file you write. The mcp-open-api compiler combines it with the spec to produce the **manifest**: the frozen artifact that the Tier 4 operator validates, that the broker hashes and that it executes.
 
 ```text
-spec OpenAPI (JSON ou YAML) ──┐
-binding (JSON)            ────┼──> compilateur ──> manifeste (JSON, figé) ──> Tier 4 ──> broker
-Overlay x-mcp-* (option)  ────┤
-Arazzo (réservé)          ────┘
+OpenAPI spec (JSON or YAML) ──┐
+binding (JSON)            ────┼──> compiler ──> manifest (JSON, frozen) ──> Tier 4 ──> broker
+Overlay x-mcp-* (optional)────┤
+Arazzo (reserved)         ────┘
 ```
 
-Statut : version 1 du format. Le schéma (`schemas/binding-1.schema.json`), les types et le compilateur sont implémentés ; l'Overlay, Arazzo et les ressources sont refusés par le compilateur tant qu'ils ne le sont pas, avec un diagnostic qui le dit.
+Status: version 1 of the format. The schema (`schemas/binding-1.schema.json`), the types and the compiler are implemented; the Overlay, Arazzo and resources are refused by the compiler as long as they are not, with a diagnostic that says so.
 
-## Principes
+## Principles
 
-1. **Refus par défaut.** Une opération absente de `tools` et de `resources` n'existe pas dans le slot. Il n'y a pas de sélection par motif (`*`, tag, préfixe de chemin) : ajouter une opération, c'est écrire sa clé.
-2. **Clé = l'opération, pas l'outil.** Une entrée est indexée par l'`operationId` de la spec, ou par `"<MÉTHODE> <chemin>"` quand la spec n'en donne pas (`"GET /valves/{id}"`). Renommer un outil ne casse rien, et une opération qui disparaît de la spec est signalée par sa clé.
-3. **Chaque argument est adressé par son emplacement HTTP** : `path.id`, `query.limit`, `header.X-Site`, `body.position`, `body.config.mode`. Le même adressage sert partout : `args`, `resourcePath`, `authorization.value`.
-4. **Restreindre, jamais élargir, par construction.** Les restrictions du binding (`pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems`) ne remplacent pas le schéma de la spec : le compilateur les **compose** avec lui (`allOf`). Une valeur doit satisfaire les deux, donc un `maximum: 200` là où la spec dit 100 reste borné à 100. Le compilateur signale seulement les contradictions (plus aucune valeur possible) et les valeurs d'`enum` invalides pour la spec. Voir [compiler.md](compiler.md).
-5. **Rien de masqué sans valeur.** Un argument requis par la spec et masqué (`hide`) doit recevoir une valeur `fixed`, ou avoir un `default` dans la spec.
-6. **Sortie explicite.** Chaque outil déclare sa sortie : une sélection de champs (`pick`), ou `"all"` écrit en toutes lettres. Les réponses sont le premier coût côté agent et le premier risque de fuite.
-7. **Aucun code.** Des emplacements, des valeurs fixes, des restrictions, des sélections de champs. Les seules expressions admises sont celles d'Arazzo, et seulement dans les workflows.
-8. **Aucun secret.** `secretRef` est un nom ; l'hôte mcp-open-api qui sert le slot le résout dans sa propre config (`secrets`), jamais dans le binding ni le manifeste.
-9. **Compilation déterministe.** La même spec, le même binding et la même version du compilateur donnent le même manifeste, octet pour octet.
-10. **Champs inconnus refusés.** Une faute de frappe (`"hidde": true`) est une erreur, pas un réglage ignoré.
+1. **Deny by default.** An operation absent from `tools` and from `resources` does not exist in the slot. There is no selection by pattern (`*`, tag, path prefix): adding an operation means writing its key.
+2. **Key = the operation, not the tool.** An entry is indexed by the spec's `operationId`, or by `"<METHOD> <path>"` when the spec does not provide one (`"GET /valves/{id}"`). Renaming a tool breaks nothing, and an operation that disappears from the spec is reported by its key.
+3. **Each argument is addressed by its HTTP location**: `path.id`, `query.limit`, `header.X-Site`, `body.position`, `body.config.mode`. The same addressing is used everywhere: `args`, `resourcePath`, `authorization.value`.
+4. **Restrict, never widen, by construction.** The binding's restrictions (`pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems`) do not replace the spec's schema: the compiler **composes** them with it (`allOf`). A value must satisfy both, so a `maximum: 200` where the spec says 100 stays bounded to 100. The compiler only reports contradictions (no possible value left) and `enum` values that are invalid for the spec. See [compiler.md](compiler.md).
+5. **Nothing hidden without a value.** An argument required by the spec and hidden (`hide`) must receive a `fixed` value, or have a `default` in the spec.
+6. **Explicit output.** Each tool declares its output: a selection of fields (`pick`), or `"all"` spelled out. Responses are the primary cost on the agent side and the primary risk of leakage.
+7. **No code.** Locations, fixed values, restrictions, field selections. The only expressions allowed are Arazzo's, and only in workflows.
+8. **No secrets.** `secretRef` is a name; the mcp-open-api host that serves the slot resolves it in its own config (`secrets`), never in the binding or the manifest.
+9. **Deterministic compilation.** The same spec, the same binding and the same compiler version give the same manifest, byte for byte.
+10. **Unknown fields refused.** A typo (`"hidde": true`) is an error, not an ignored setting.
 
 ## Structure
 
@@ -31,8 +31,8 @@ Statut : version 1 du format. Le schéma (`schemas/binding-1.schema.json`), les 
     "$schema": "https://raw.githubusercontent.com/pandaGaume/mcp-open-api/main/schemas/binding-1.schema.json",
     "binding": 1,
     "slot": "vannes",
-    "title": "Vannes du réseau Nord",
-    "instructions": "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
+    "title": "North network valves",
+    "instructions": "Reads and controls the valves of the north network. Every opening is bounded to 0-100 %.",
     "spec": { "path": "specs/ot-gateway.yaml", "sha256": "9f2c…" },
     "target": { "baseUrl": "https://ot-gw.local/api/v2", "auth": { "secretRef": "otGateway" }, "timeoutMs": 10000, "maxResponseBytes": 1048576 },
     "governance": { "domain": "valves", "namespace": "/site/nord" },
@@ -42,40 +42,40 @@ Statut : version 1 du format. Le schéma (`schemas/binding-1.schema.json`), les 
 }
 ```
 
-| champ | requis | rôle |
+| field | required | role |
 | --- | --- | --- |
-| `$schema` | non | complétion et validation dans l'éditeur |
-| `binding` | oui | version du format, `1` |
-| `slot` | oui | nom du slot publié |
-| `title` | non | titre du serveur MCP (`serverInfo.title`) |
-| `instructions` | non | instructions du serveur MCP, renvoyées à l'`initialize` |
-| `spec` | oui | la spec source : `path` (relatif au binding) ou `url`, et son `sha256` |
-| `target` | oui | où et comment appeler l'API |
-| `governance` | si un outil a une `authorization` | `domain` et `namespace` déclarés au broker. Le domaine est **celui du slot** : les ressources qu'il gouverne sont des noms qualifiés `<domaine>:<chemin>`, et `valves:/site/nord/**` n'est pas `scada:/site/nord/**`. Un domaine n'a qu'un propriétaire : un slot ne déclare jamais le domaine d'un autre provider |
-| `tools` | non | les opérations exposées en outils, par clé d'opération |
-| `resources` | non | les opérations `GET` exposées en ressources, par clé d'opération |
-| `arazzo` | non | document Arazzo des workflows (réservé, voir plus bas) |
+| `$schema` | no | completion and validation in the editor |
+| `binding` | yes | format version, `1` |
+| `slot` | yes | name of the published slot |
+| `title` | no | title of the MCP server (`serverInfo.title`) |
+| `instructions` | no | instructions of the MCP server, returned at `initialize` |
+| `spec` | yes | the source spec: `path` (relative to the binding) or `url`, and its `sha256` |
+| `target` | yes | where and how to call the API |
+| `governance` | if a tool has an `authorization` | `domain` and `namespace` declared to the broker. The domain is **the slot's own**: the resources it governs are qualified names `<domain>:<path>`, and `valves:/site/nord/**` is not `scada:/site/nord/**`. A domain has only one owner: a slot never declares another provider's domain |
+| `tools` | no | the operations exposed as tools, by operation key |
+| `resources` | no | the `GET` operations exposed as resources, by operation key |
+| `arazzo` | no | Arazzo document of the workflows (reserved, see below) |
 
-Un binding couvre **une** spec et **un** slot.
+A binding covers **one** spec and **one** slot.
 
 ### `target`
 
-| champ | requis | défaut | rôle |
+| field | required | default | role |
 | --- | --- | --- | --- |
-| `baseUrl` | oui | | origine et préfixe de l'API ; son origine doit figurer dans les `allowedTargets` de l'hôte qui sert le slot. Le `servers[]` de la spec n'est jamais utilisé tel quel |
-| `auth.secretRef` | non | | nom du secret, résolu par l'hôte dans sa config (`secrets`) |
-| `auth.scheme` | non | le seul `securityScheme` de la spec | nom du `securityScheme` à appliquer quand la spec en déclare plusieurs |
-| `headers` | non | | en-têtes fixes et non secrets (`"Accept-Language": "fr"`) |
-| `timeoutMs` | non | 10000 | délai par appel HTTP |
-| `maxResponseBytes` | non | 1048576 | au-delà, la lecture est coupée et l'appel échoue |
+| `baseUrl` | yes | | origin and prefix of the API; its origin must appear in the `allowedTargets` of the host that serves the slot. The spec's `servers[]` is never used as is |
+| `auth.secretRef` | no | | name of the secret, resolved by the host in its config (`secrets`) |
+| `auth.scheme` | no | the spec's only `securityScheme` | name of the `securityScheme` to apply when the spec declares several |
+| `headers` | no | | fixed, non-secret headers (`"Accept-Language": "fr"`) |
+| `timeoutMs` | no | 10000 | timeout per HTTP call |
+| `maxResponseBytes` | no | 1048576 | beyond this, reading is cut off and the call fails |
 
-## Les outils : `tools`
+## Tools: `tools`
 
 ```json
 "setValvePosition": {
     "name": "ouvrir_vanne",
-    "description": "Fixe l'ouverture d'une vanne du réseau Nord, en pourcentage.",
-    "note": "Mode forcé à manual : le mode auto est réservé à la supervision.",
+    "description": "Sets the opening of a valve of the north network, in percent.",
+    "note": "Mode forced to manual: auto mode is reserved for supervision.",
     "args": {
         "path.id": { "name": "vanne", "pattern": "^V-\\d{3}$" },
         "body.position": { "name": "pourcent", "minimum": 0, "maximum": 100 },
@@ -93,104 +93,104 @@ Un binding couvre **une** spec et **un** slot.
 }
 ```
 
-| champ | défaut | rôle |
+| field | default | role |
 | --- | --- | --- |
-| `name` | `operationId` en snake_case | nom de l'outil : `^[a-z][a-z0-9_]{0,47}$`, 48 caractères pour laisser la place au préfixe de `_all` |
-| `title` | `summary` de la spec | titre affiché |
-| `description` | `summary`, puis `description` de la spec | texte lu par le LLM ; 2 000 caractères au plus |
-| `note` | | pourquoi ces choix ; montré au Tier 4, jamais envoyé au client MCP |
-| `args` | tous les paramètres de la spec, sous leur nom | voir ci-dessous |
-| `output` | **aucun : requis** | voir ci-dessous |
-| `annotations` | déduites de la méthode | `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` |
-| `authorization` | aucune | voir ci-dessous ; requise pour toute méthode autre que `GET` et `HEAD` |
-| `timeoutMs` | celui de `target` | délai propre à cet outil |
+| `name` | `operationId` in snake_case | name of the tool: `^[a-z][a-z0-9_]{0,47}$`, 48 characters to leave room for the `_all` prefix |
+| `title` | the spec's `summary` | displayed title |
+| `description` | `summary`, then the spec's `description` | text read by the LLM; 2,000 characters at most |
+| `note` | | why these choices were made; shown to Tier 4, never sent to the MCP client |
+| `args` | all the spec's parameters, under their names | see below |
+| `output` | **none: required** | see below |
+| `annotations` | deduced from the method | `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` |
+| `authorization` | none | see below; required for any method other than `GET` and `HEAD` |
+| `timeoutMs` | the one from `target` | timeout specific to this tool |
 
 ### `args`
 
-Chaque clé est un emplacement : `path.<nom>`, `query.<nom>`, `header.<nom>`, `body` (corps entier), `body.<chemin>` (propriété du corps, chemin pointé). Un emplacement absent de `args` est exposé tel que la spec le décrit.
+Each key is a location: `path.<name>`, `query.<name>`, `header.<name>`, `body` (entire body), `body.<path>` (body property, dotted path). A location absent from `args` is exposed as the spec describes it.
 
-| champ | rôle |
+| field | role |
 | --- | --- |
-| `name` | nom de l'argument côté MCP |
-| `description` | remplace la description de la spec |
-| `hide` | l'argument n'est pas exposé ; il prend sa valeur `fixed` ou son `default` |
-| `fixed` | valeur imposée, jamais choisie par l'appelant ; implique `hide` |
-| `pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems` | restrictions, composées avec le schéma de la spec (`allOf`) : elles ne peuvent que resserrer |
+| `name` | name of the argument on the MCP side |
+| `description` | replaces the spec's description |
+| `hide` | the argument is not exposed; it takes its `fixed` value or its `default` |
+| `fixed` | imposed value, never chosen by the caller; implies `hide` |
+| `pattern`, `enum`, `minimum`, `maximum`, `maxLength`, `maxItems` | restrictions, composed with the spec's schema (`allOf`): they can only tighten |
 
-Règles de nommage par défaut :
+Default naming rules:
 
-- un paramètre `path`, `query` ou `header` garde son nom ;
-- un corps JSON objet est aplati au premier niveau : `body.position` devient l'argument `position` ;
-- un corps qui n'est pas un objet devient un argument unique, `body` ;
-- deux emplacements qui donneraient le même nom (`path.id` et `query.id`) sont une **erreur** : le binding doit en renommer un ;
-- les en-têtes `Authorization`, `Cookie` et ceux que pose `target.auth` ne sont jamais exposés.
+- a `path`, `query` or `header` parameter keeps its name;
+- a JSON object body is flattened at the first level: `body.position` becomes the argument `position`;
+- a body that is not an object becomes a single argument, `body`;
+- two locations that would give the same name (`path.id` and `query.id`) are an **error**: the binding must rename one of them;
+- the `Authorization` and `Cookie` headers, and those set by `target.auth`, are never exposed.
 
-Corps acceptés en version 1 : `application/json` seulement. Une opération dont le corps est `multipart/form-data` ou `application/octet-stream` est refusée par le compilateur.
+Bodies accepted in version 1: `application/json` only. An operation whose body is `multipart/form-data` or `application/octet-stream` is refused by the compiler.
 
 ### `output`
 
-| forme | effet |
+| form | effect |
 | --- | --- |
-| `"all"` | la réponse JSON entière, en `structuredContent` et en texte |
-| `{ "pick": [...] }` | seulement ces champs, chemins pointés ; `[]` parcourt un tableau : `"items[].id"` |
-| `{ "pick": [...], "maxItems": 20 }` | en plus, les tableaux sont coupés à 20 éléments, et le nombre total est indiqué |
+| `"all"` | the entire JSON response, as `structuredContent` and as text |
+| `{ "pick": [...] }` | only these fields, dotted paths; `[]` walks an array: `"items[].id"` |
+| `{ "pick": [...], "maxItems": 20 }` | in addition, arrays are cut to 20 elements, and the total count is indicated |
 
-Le compilateur dérive l'`outputSchema` MCP de la première réponse 2xx de la spec, réduite à `pick`. Un chemin de `pick` absent du schéma de réponse est une erreur.
+The compiler derives the MCP `outputSchema` from the spec's first 2xx response, reduced to `pick`. A `pick` path absent from the response schema is an error.
 
-Une réponse 4xx ou 5xx donne `isError: true` avec le statut HTTP. Si le corps est un *problem details* ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)), son `title` et son `detail` sont repris. Sinon, le corps n'est pas renvoyé : une page d'erreur peut contenir n'importe quoi.
+A 4xx or 5xx response gives `isError: true` with the HTTP status. If the body is a *problem details* ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)), its `title` and its `detail` are passed through. Otherwise, the body is not returned: an error page can contain anything.
 
-### `annotations` par défaut
+### Default `annotations`
 
-| méthode | annotations |
+| method | annotations |
 | --- | --- |
 | `GET`, `HEAD` | `readOnlyHint: true` |
 | `PUT` | `idempotentHint: true` |
 | `DELETE` | `destructiveHint: true`, `idempotentHint: true` |
-| `POST`, `PATCH` | aucune ; le compilateur avertit tant que le binding n'en pose pas |
+| `POST`, `PATCH` | none; the compiler warns as long as the binding does not set any |
 
 ### `authorization`
 
-| champ | rôle |
+| field | role |
 | --- | --- |
-| `capability` | capacité vérifiée par `broker/authorize` ; doit être sous `<governance.domain>.*` |
-| `resourcePath` | chemin de ressource, relatif au `namespace` ; les gabarits utilisent l'adressage des `args` : `valves/{path.id}` |
-| `value` | l'argument qui porte la valeur écrite. Une décision `allow-with-constraints` s'applique à cet argument. Les limites déclarées au broker pour le gabarit de `resourcePath` sont **déduites de son schéma** (`minimum` et `maximum` donnent `minValue` et `maxValue`, `enum` donne `allowedValues`) et déclarées par motif (broker 1.7.0 ou plus), voir compiler.md |
-| `resultRequired` | le résultat de l'appel doit être rapporté au broker (`broker/audit/result`) |
+| `capability` | capability checked by `broker/authorize`; must be under `<governance.domain>.*` |
+| `resourcePath` | resource path, relative to the `namespace`; templates use the `args` addressing: `valves/{path.id}` |
+| `value` | the argument that carries the written value. An `allow-with-constraints` decision applies to this argument. The limits declared to the broker for the `resourcePath` template are **deduced from its schema** (`minimum` and `maximum` give `minValue` and `maxValue`, `enum` gives `allowedValues`) and declared by pattern (broker 1.7.0 or later), see compiler.md |
+| `resultRequired` | the result of the call must be reported to the broker (`broker/audit/result`) |
 
-Le compilateur produit la déclaration du slot à partir de toutes les entrées : une capacité par capacité distincte, une ressource par gabarit de `resourcePath`, avec ses limites.
+The compiler produces the slot's declaration from all the entries: one capability per distinct capability, one resource per `resourcePath` template, with its limits.
 
-## Les ressources : `resources`
+## Resources: `resources`
 
-Une opération `GET` sans corps peut être exposée en ressource MCP plutôt qu'en outil.
+A `GET` operation without a body can be exposed as an MCP resource rather than as a tool.
 
 ```json
 "getValve": {
     "uri": "valve://nord/{path.id}",
     "name": "vanne",
-    "description": "État d'une vanne du réseau Nord.",
+    "description": "State of a valve of the north network.",
     "output": { "pick": ["id", "position", "state", "updatedAt"] },
     "authorization": { "capability": "valves.read", "resourcePath": "valves/{path.id}" }
 }
 ```
 
-Une `uri` avec gabarit devient un *resource template* ; sans gabarit, une ressource fixe. Les arguments du gabarit doivent couvrir tous les paramètres requis de l'opération. Les abonnements (`resources/subscribe`) passent par le broker comme pour tout provider ; mcp-open-api n'interroge pas l'API en boucle pour les alimenter en version 1.
+A templated `uri` becomes a *resource template*; without a template, a fixed resource. The template's arguments must cover all of the operation's required parameters. Subscriptions (`resources/subscribe`) go through the broker as for any provider; in version 1, mcp-open-api does not poll the API to feed them.
 
-Une même opération peut figurer à la fois dans `tools` et dans `resources`.
+The same operation can appear in both `tools` and `resources`.
 
-## Overlay : la même chose, dans la spec
+## Overlay: the same thing, in the spec
 
-Un [Overlay 1.0](https://spec.openapis.org/overlay/v1.0.0.html) peut porter le binding sous forme d'extensions. Le contenu est **exactement le même objet** :
+An [Overlay 1.0](https://spec.openapis.org/overlay/v1.0.0.html) can carry the binding in the form of extensions. The content is **exactly the same object**:
 
-| extension | où | contenu |
+| extension | where | content |
 | --- | --- | --- |
-| `x-mcp-slot` | racine de la spec | les champs de premier niveau du binding, sauf `tools`, `resources` et `spec` |
-| `x-mcp-tool` | une opération | une entrée de `tools` |
-| `x-mcp-resource` | une opération | une entrée de `resources` |
+| `x-mcp-slot` | root of the spec | the binding's top-level fields, except `tools`, `resources` and `spec` |
+| `x-mcp-tool` | an operation | an entry of `tools` |
+| `x-mcp-resource` | an operation | an entry of `resources` |
 
 ```json
 {
     "overlay": "1.0.0",
-    "info": { "title": "Binding vannes", "version": "1" },
+    "info": { "title": "Valves binding", "version": "1" },
     "extends": "specs/ot-gateway.yaml",
     "actions": [
         {
@@ -208,13 +208,13 @@ Un [Overlay 1.0](https://spec.openapis.org/overlay/v1.0.0.html) peut porter le b
 }
 ```
 
-Le compilateur applique l'Overlay, puis ramène le résultat à un binding : il ne retient **que** les opérations qui portent `x-mcp-tool` ou `x-mcp-resource`, ce qui préserve le refus par défaut. Il compare ensuite la spec avant et après l'Overlay, et refuse tout schéma élargi par une action `update`.
+The compiler applies the Overlay, then reduces the result to a binding: it keeps **only** the operations that carry `x-mcp-tool` or `x-mcp-resource`, which preserves deny by default. It then compares the spec before and after the Overlay, and refuses any schema widened by an `update` action.
 
-Le designer sait aussi produire un Overlay à partir d'un binding, pour l'équipe qui maintient la spec. L'aller-retour est sans perte.
+The designer can also produce an Overlay from a binding, for the team that maintains the spec. The round trip is lossless.
 
-## Arazzo : les workflows (réservé)
+## Arazzo: workflows (reserved)
 
-Le format réserve dès la version 1 la place des outils à plusieurs appels. Leur exécution viendra au lot « outils à plusieurs étapes ».
+From version 1, the format reserves the place for multi-call tools. Their execution will come with the "multi-step tools" work package.
 
 ```json
 "arazzo": { "path": "workflows/vannes.arazzo.yaml", "sha256": "41ab…" },
@@ -222,63 +222,63 @@ Le format réserve dès la version 1 la place des outils à plusieurs appels. Le
     "ouvertureSecurisee": {
         "from": "workflow",
         "name": "ouvrir_vanne_securisee",
-        "description": "Vérifie que la vanne n'est pas verrouillée, puis fixe son ouverture.",
+        "description": "Checks that the valve is not locked, then sets its opening.",
         "output": { "pick": ["id", "position"] },
         "authorization": { "capability": "valves.write", "resourcePath": "valves/{inputs.vanne}" }
     }
 }
 ```
 
-La clé est le `workflowId`. Les entrées du workflow donnent le schéma d'entrée de l'outil, ses sorties le `structuredContent`. Les gabarits adressent les entrées par `inputs.<nom>`.
+The key is the `workflowId`. The workflow's inputs give the tool's input schema, its outputs the `structuredContent`. Templates address the inputs by `inputs.<name>`.
 
-Règles :
+Rules:
 
-- chaque étape appelle une opération que le binding déclare aussi dans `tools`, avec ses restrictions : un workflow n'atteint rien que le binding n'expose pas ;
-- toutes les autorisations (celle du workflow et celle de chaque étape) sont vérifiées **avant** la première étape ;
-- le runtime borne le nombre d'étapes exécutées (20 par défaut) et les `retry`, parce que `goto` permet des boucles ;
-- il n'y a pas de transaction : un workflow qui écrit est signalé « non atomique » sur la page Tier 4 ;
-- les expressions Arazzo (`$inputs`, `$steps`, `$response`) sont admises ici, et nulle part ailleurs dans le binding.
+- each step calls an operation that the binding also declares in `tools`, with its restrictions: a workflow reaches nothing that the binding does not expose;
+- all authorizations (the workflow's and each step's) are checked **before** the first step;
+- the runtime bounds the number of steps executed (20 by default) and the `retry`s, because `goto` allows loops;
+- there is no transaction: a workflow that writes is flagged "non-atomic" on the Tier 4 page;
+- Arazzo expressions (`$inputs`, `$steps`, `$response`) are allowed here, and nowhere else in the binding.
 
-Tant que l'exécution n'existe pas, le compilateur refuse `from: "workflow"` avec un message qui le dit.
+As long as execution does not exist, the compiler refuses `from: "workflow"` with a message that says so.
 
 ## Compilation
 
-Le compilateur lit la spec, applique l'Overlay éventuel, vérifie le `sha256` de la spec, puis produit le manifeste et son empreinte. Il renvoie **toutes** les erreurs, pas la première.
+The compiler reads the spec, applies the Overlay if any, checks the spec's `sha256`, then produces the manifest and its fingerprint. It returns **all** errors, not just the first one.
 
-Erreurs :
+Errors:
 
-- `sha256` de la spec différent de celui du binding ;
-- clé d'opération introuvable dans la spec ;
-- emplacement d'`args` introuvable dans l'opération ;
-- restriction contradictoire avec la spec (plus aucune valeur possible), ou valeur d'`enum` invalide pour la spec ;
-- argument requis masqué sans `fixed` ni `default` ;
-- deux arguments du même nom, ou nom d'outil invalide, ou en double ;
-- `output` absent, ou chemin de `pick` absent du schéma de réponse ;
-- méthode autre que `GET` ou `HEAD` sans `authorization` ;
-- capacité hors de `<domain>.*`, gabarit de `resourcePath` qui vise un argument inexistant ;
-- `value` qui ne vise pas un argument numérique ou énuméré ;
-- corps d'un type autre que `application/json` ;
-- champ inconnu ;
-- `from: "workflow"` tant que l'exécution n'existe pas.
+- the spec's `sha256` differs from the binding's;
+- operation key not found in the spec;
+- `args` location not found in the operation;
+- restriction that contradicts the spec (no possible value left), or `enum` value invalid for the spec;
+- required argument hidden without `fixed` or `default`;
+- two arguments with the same name, or an invalid or duplicate tool name;
+- `output` missing, or `pick` path absent from the response schema;
+- method other than `GET` or `HEAD` without `authorization`;
+- capability outside `<domain>.*`, `resourcePath` template that targets a nonexistent argument;
+- `value` that does not target a numeric or enumerated argument;
+- body of a type other than `application/json`;
+- unknown field;
+- `from: "workflow"` as long as execution does not exist.
 
-Avertissements :
+Warnings:
 
-- `POST` ou `PATCH` sans annotations ;
-- description vide, ou reprise de la spec sans retouche ;
-- plus de 40 outils (plafond réglable côté broker) ;
-- `output: "all"` sur une réponse dont le schéma dépasse 20 propriétés ou contient un tableau sans `maxItems`.
+- `POST` or `PATCH` without annotations;
+- empty description, or one taken from the spec without any edit;
+- more than 40 tools (cap configurable on the broker side);
+- `output: "all"` on a response whose schema exceeds 20 properties or contains an array without `maxItems`.
 
-Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le binding : schémas d'entrée et de sortie résolus, appels HTTP explicites (méthode, gabarit de chemin, placement de chaque argument, valeurs fixes), sélections de sortie, annotations, déclaration d'autorisation, et la version du compilateur. C'est ce document que la page Tier 4 montre et que le broker publie.
+The manifest contains everything needed to execute without the spec or the binding: resolved input and output schemas, explicit HTTP calls (method, path template, placement of each argument, fixed values), output selections, annotations, authorization declaration, and the compiler version. This is the document that the Tier 4 page shows and that the broker publishes.
 
-## Exemple complet
+## Complete example
 
 ```json
 {
     "$schema": "https://raw.githubusercontent.com/pandaGaume/mcp-open-api/main/schemas/binding-1.schema.json",
     "binding": 1,
     "slot": "vannes",
-    "title": "Vannes du réseau Nord",
-    "instructions": "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
+    "title": "North network valves",
+    "instructions": "Reads and controls the valves of the north network. Every opening is bounded to 0-100 %.",
     "spec": { "path": "specs/ot-gateway.yaml", "sha256": "9f2c4e1b7a0d3c5f8e6b2a1d4c7f0e9b3a6d5c8f1e4b7a0d2c5f8e1b4a7d0c3f" },
     "target": {
         "baseUrl": "https://ot-gw.local/api/v2",
@@ -290,9 +290,9 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
     "tools": {
         "getValve": {
             "name": "lire_vanne",
-            "description": "Lit la position (0-100 %) et l'état d'une vanne du réseau Nord.",
+            "description": "Reads the position (0-100 %) and state of a valve of the north network.",
             "args": {
-                "path.id": { "name": "vanne", "description": "Repère de la vanne, ex. V-012", "pattern": "^V-\\d{3}$" },
+                "path.id": { "name": "vanne", "description": "Valve tag, e.g. V-012", "pattern": "^V-\\d{3}$" },
                 "query.debug": { "hide": true }
             },
             "output": { "pick": ["id", "position", "state", "updatedAt"] },
@@ -300,14 +300,14 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
         },
         "listValves": {
             "name": "lister_vannes",
-            "description": "Liste les vannes du réseau Nord et leur état.",
+            "description": "Lists the valves of the north network and their state.",
             "output": { "pick": ["items[].id", "items[].state"], "maxItems": 50 },
             "authorization": { "capability": "valves.read", "resourcePath": "valves" }
         },
         "setValvePosition": {
             "name": "ouvrir_vanne",
-            "description": "Fixe l'ouverture d'une vanne du réseau Nord, en pourcentage.",
-            "note": "Mode forcé à manual : le mode auto est réservé à la supervision.",
+            "description": "Sets the opening of a valve of the north network, in percent.",
+            "note": "Mode forced to manual: auto mode is reserved for supervision.",
             "args": {
                 "path.id": { "name": "vanne", "pattern": "^V-\\d{3}$" },
                 "body.position": { "name": "pourcent", "minimum": 0, "maximum": 100 },
@@ -334,22 +334,22 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
 }
 ```
 
-## Décisions prises
+## Decisions
 
-| question | décision |
+| question | decision |
 | --- | --- |
-| format du binding | JSON, avec `$schema` ; `note` remplace les commentaires et fait partie de la revue |
-| format de la spec et de l'Overlay | JSON ou YAML : ce ne sont pas nos formats |
-| gabarits de `resourcePath` | adressage par emplacement (`{path.id}`), indépendant des renommages |
-| sortie par défaut | aucune : `output` est requis, `"all"` s'écrit explicitement |
-| limites de gouvernance | déduites du schéma de l'argument désigné par `authorization.value`, déclarées par motif (broker 1.7.0 ou plus) |
-| domaine | propre au slot, jamais celui d'un autre provider : une ressource gouvernée est un nom qualifié `<domaine>:<chemin>` |
-| plusieurs specs par binding | non : une spec, un binding, un slot |
-| Overlay | en entrée et en sortie, équivalence exacte avec `x-mcp-tool` et `x-mcp-resource` |
-| Arazzo | réservé dans le format dès la version 1, exécuté au lot « outils à plusieurs étapes » |
+| binding format | JSON, with `$schema`; `note` replaces comments and is part of the review |
+| spec and Overlay format | JSON or YAML: these are not our formats |
+| `resourcePath` templates | addressing by location (`{path.id}`), independent of renamings |
+| default output | none: `output` is required, `"all"` is written explicitly |
+| governance limits | deduced from the schema of the argument designated by `authorization.value`, declared by pattern (broker 1.7.0 or later) |
+| domain | specific to the slot, never another provider's: a governed resource is a qualified name `<domain>:<path>` |
+| several specs per binding | no: one spec, one binding, one slot |
+| Overlay | as input and as output, exact equivalence with `x-mcp-tool` and `x-mcp-resource` |
+| Arazzo | reserved in the format from version 1, executed in the "multi-step tools" work package |
 
-## Questions ouvertes
+## Open questions
 
-- **Pagination.** Faut-il un champ qui décrit la pagination d'une opération (curseur, page, `Link`), pour que le runtime suive les pages jusqu'à `maxItems` ? En version 1, le curseur est un argument ordinaire.
-- **Plusieurs réponses 2xx.** Une opération qui répond 200 ou 202 avec des schémas différents : on prend la première, ou on exige que le binding choisisse ?
-- **Collisions avec `_all`.** Le préfixe de `_all` est ajouté par le broker. Faut-il que le compilateur vérifie la longueur finale `<slot>-<nom>` plutôt que le seul nom ?
+- **Pagination.** Should there be a field that describes an operation's pagination (cursor, page, `Link`), so that the runtime follows pages up to `maxItems`? In version 1, the cursor is an ordinary argument.
+- **Several 2xx responses.** An operation that responds 200 or 202 with different schemas: do we take the first one, or require the binding to choose?
+- **Collisions with `_all`.** The `_all` prefix is added by the broker. Should the compiler check the final length `<slot>-<name>` rather than the name alone?

@@ -56,7 +56,7 @@ npx @cyanmycelium/mcp-open-api serve --config mcp-open-api.json
 
 The host's provider identity (`VANNES_PROVIDER_SECRET`) is an entry of the broker's security file, with its `allowedResources`.
 
-Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.md) (French).
+Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.md).
 
 ## Requirements
 

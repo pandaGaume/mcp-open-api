@@ -5,8 +5,8 @@ export const vannes: IBinding = {
     $schema: "https://raw.githubusercontent.com/pandaGaume/mcp-open-api/main/schemas/binding-1.schema.json",
     binding: 1,
     slot: "vannes",
-    title: "Vannes du réseau Nord",
-    instructions: "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
+    title: "North network valves",
+    instructions: "Reads and controls the valves of the north network. Every opening is bounded to 0-100 %.",
     spec: { path: "specs/ot-gateway.yaml", sha256: "9f2c4e1b7a0d3c5f8e6b2a1d4c7f0e9b3a6d5c8f1e4b7a0d2c5f8e1b4a7d0c3f" },
     target: {
         baseUrl: "https://ot-gw.local/api/v2",
@@ -18,9 +18,9 @@ export const vannes: IBinding = {
     tools: {
         getValve: {
             name: "lire_vanne",
-            description: "Lit la position (0-100 %) et l'état d'une vanne du réseau Nord.",
+            description: "Reads the position (0-100 %) and state of a valve of the north network.",
             args: {
-                "path.id": { name: "vanne", description: "Repère de la vanne, ex. V-012", pattern: "^V-\\d{3}$" },
+                "path.id": { name: "vanne", description: "Valve tag, e.g. V-012", pattern: "^V-\\d{3}$" },
                 "query.debug": { hide: true },
             },
             output: { pick: ["id", "position", "state", "updatedAt"] },
@@ -28,14 +28,14 @@ export const vannes: IBinding = {
         },
         listValves: {
             name: "lister_vannes",
-            description: "Liste les vannes du réseau Nord et leur état.",
+            description: "Lists the valves of the north network and their state.",
             output: { pick: ["items[].id", "items[].state"], maxItems: 50 },
             authorization: { capability: "valves.read", resourcePath: "valves" },
         },
         setValvePosition: {
             name: "ouvrir_vanne",
-            description: "Fixe l'ouverture d'une vanne du réseau Nord, en pourcentage.",
-            note: "Mode forcé à manual : le mode auto est réservé à la supervision.",
+            description: "Sets the opening of a valve of the north network, in percent.",
+            note: "Mode forced to manual: auto mode is reserved for supervision.",
             args: {
                 "path.id": { name: "vanne", pattern: "^V-\\d{3}$" },
                 "body.position": { name: "pourcent", minimum: 0, maximum: 100 },

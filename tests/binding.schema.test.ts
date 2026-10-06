@@ -35,7 +35,7 @@ describe("binding-1 schema", () => {
     });
 
     it("accepts the complete example of docs/binding.md, identical to the typed fixture", () => {
-        const example = jsonBlockAfter("## Exemple complet");
+        const example = jsonBlockAfter("## Complete example");
         expect(example).toEqual(vannes);
         expect(valid(example)).toBe(true);
     });
