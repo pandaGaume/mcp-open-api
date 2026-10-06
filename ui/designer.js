@@ -1,9 +1,11 @@
-// The Tier 4 page of the mcp-open-api designer. Served by the broker under
-// /ui/<slot>/, it talks to the designer's slot at /<slot>/mcp on the same
-// origin. It signs in the browser: the private key never leaves this page.
+// The Tier 4 page of mcp-open-api: designs a slot from an OpenAPI spec and
+// produces a signed manifest. Static, to host anywhere: the compiler runs
+// here (designer-core.js), nothing is sent to any server, and the private key
+// never leaves the page.
+
+import { DesignSession, fetchSpec, hostProfileOf, sha256 } from "./designer-core.js";
 
 const $ = (id) => document.getElementById(id);
-const SLOT = new URLSearchParams(location.search).get("slot") ?? location.pathname.split("/").filter(Boolean)[1] ?? "designer";
 const READ_METHODS = new Set(["GET", "HEAD"]);
 
 /** Builds an element; strings become text nodes, never HTML: spec content is untrusted. */
@@ -21,100 +23,20 @@ function el(tag, attrs = {}, ...children) {
     return node;
 }
 
-// ── MCP over Streamable HTTP ────────────────────────────────────────────────
-
-class McpClient {
-    constructor(url, token) {
-        this.url = url;
-        this.token = token;
-        this.session = null;
-        this.id = 1;
-    }
-
-    async _post(message) {
-        const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
-        if (this.token) headers.authorization = `Bearer ${this.token}`;
-        if (this.session) headers["mcp-session-id"] = this.session;
-        const res = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(message) });
-        if (res.status === 401 || res.status === 403)
-            throw new Error(`the broker refused the call (HTTP ${res.status}): check the token, and that this origin is in allowedOrigins`);
-        return res;
-    }
-
-    async _read(res, id) {
-        const text = await res.text();
-        if (!text) return undefined;
-        if (!(res.headers.get("content-type") ?? "").includes("text/event-stream")) return JSON.parse(text);
-        for (const line of text.split("\n")) {
-            if (!line.startsWith("data:")) continue;
-            const message = JSON.parse(line.slice(5));
-            if (message.id === id) return message;
-        }
-        return undefined;
-    }
-
-    async connect() {
-        const res = await this._post({
-            jsonrpc: "2.0",
-            id: 0,
-            method: "initialize",
-            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "mcp-open-api designer page", version: "1" } },
-        });
-        const answer = await this._read(res, 0);
-        if (!res.ok || !answer || answer.error) throw new Error(answer?.error?.message ?? `initialize failed: HTTP ${res.status}`);
-        this.session = res.headers.get("mcp-session-id");
-        await this._post({ jsonrpc: "2.0", method: "notifications/initialized" });
-        return answer.result;
-    }
-
-    async tool(name, args = {}) {
-        const id = this.id++;
-        const res = await this._post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
-        const answer = await this._read(res, id);
-        if (!answer) throw new Error(`no answer to ${name} (HTTP ${res.status})`);
-        if (answer.error) throw new Error(answer.error.message);
-        const result = answer.result;
-        const text = result.content?.[0]?.text ?? "{}";
-        if (result.isError) {
-            let error;
-            try {
-                error = JSON.parse(text).error;
-            } catch {
-                error = { message: text };
-            }
-            throw Object.assign(new Error(error.message), { code: error.code, problems: error.problems });
-        }
-        return result.structuredContent ?? JSON.parse(text);
-    }
-
-    close() {
-        if (!this.session) return;
-        const headers = { "mcp-session-id": this.session };
-        if (this.token) headers.authorization = `Bearer ${this.token}`;
-        fetch(this.url, { method: "DELETE", headers, keepalive: true }).catch(() => {});
-        this.session = null;
-    }
-}
-
 // ── State ───────────────────────────────────────────────────────────────────
 
 const state = {
-    mcp: null,
-    hosts: [],
+    /** The DesignSession: spec, binding, compiled on every change. */
+    session: null,
     draft: null,
     binding: null,
     review: null,
+    host: undefined,
     approvals: new Set(),
     key: null,
     timer: null,
-    pending: Promise.resolve(),
+    files: [],
 };
-
-function setStatus(text, kind) {
-    const s = $("status");
-    s.textContent = text;
-    s.className = `status ${kind ?? ""}`;
-}
 
 function show(id, visible = true) {
     $(id).hidden = !visible;
@@ -124,7 +46,7 @@ function problemList(error) {
     return el(
         "div",
         { class: "notice error" },
-        el("strong", {}, error.message),
+        el("strong", {}, error.message.split(":\n")[0]),
         error.problems?.length
             ? el(
                   "ul",
@@ -135,192 +57,100 @@ function problemList(error) {
     );
 }
 
-// ── 1. Connect and import ───────────────────────────────────────────────────
+// ── 0. The target host, optional ────────────────────────────────────────────
 
-$("slot-label").textContent = `talks to /${SLOT}/mcp`;
-$("token").value = sessionStorageGet("designer-token") ?? "";
+const splitList = (text) =>
+    text
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-function sessionStorageGet(key) {
-    try {
-        return sessionStorage.getItem(key);
-    } catch {
-        return null;
+function setHost(host) {
+    state.host = host;
+    $("host-targets").value = host?.allowedTargets.join(", ") ?? "";
+    $("host-secrets").value = host?.secrets.join(", ") ?? "";
+    renderHostStatus();
+    if (state.session) {
+        state.session.setHost(host);
+        renderSlotForm();
+        schedule();
     }
 }
 
-function sessionStorageSet(key, value) {
-    try {
-        sessionStorage.setItem(key, value);
-    } catch {
-        // private mode: the operator types the token again
-    }
+function renderHostStatus() {
+    const host = state.host;
+    $("host-status").textContent = host
+        ? `Checked against ${host.name ? `host "${host.name}"` : "this host"}: calls ${host.allowedTargets.join(", ") || "nothing"}; secrets ${host.secrets.join(", ") || "none"}.`
+        : "No host: the base URL and the credential are not checked. The host that loads the manifest will check them.";
 }
 
-/** Says what to do while the page is not connected: an empty host list is never left unexplained. */
-function help(kind, ...content) {
-    const box = $("connection-help");
-    box.hidden = content.length === 0;
-    box.className = `notice ${kind}`;
-    box.replaceChildren(...content);
-}
-
-async function connect() {
-    state.mcp?.close();
-    const token = $("token").value.trim();
-    sessionStorageSet("designer-token", token);
-    state.mcp = new McpClient(new URL(`/${SLOT}/mcp`, location.origin).href, token);
-    setStatus("connecting...");
+$("host-file").addEventListener("change", async () => {
+    const file = $("host-file").files[0];
+    if (!file) return;
     try {
-        await state.mcp.connect();
-        const { hosts } = await state.mcp.tool("designer_hosts");
-        state.hosts = hosts;
-        renderHosts();
-        setStatus("connected", "on");
-        help("ok");
-        $("import").querySelector("button").disabled = false;
+        setHost(hostProfileOf(JSON.parse(await file.text()), file.name.replace(/\.json$/, "")));
     } catch (error) {
-        setStatus("not connected", "off");
-        $("import").querySelector("button").disabled = true;
-        const refused = /HTTP 401|HTTP 403/.test(error.message);
-        help(
-            "error",
-            el("strong", {}, refused ? "The broker refused the page. " : `No designer answers on the slot "${SLOT}". `),
-            el("span", {}, error.message),
-            el(
-                "ul",
-                {},
-                refused
-                    ? [
-                          el(
-                              "li",
-                              {},
-                              "This broker authenticates its clients: paste the access token its authorization server issued you above, then Connect. A broker run without client auth (no auth section in its config, as in development) needs none."
-                          ),
-                          el("li", {}, `List ${location.origin} in the broker's allowedOrigins.`),
-                      ]
-                    : [
-                          el("li", {}, "Start the designer: mcp-open-api design --config designer.json"),
-                          el("li", {}, "The host list comes from the hosts of that designer.json, each the path of a host's mcp-open-api.json."),
-                          el("li", {}, "To try it all on one machine: npm run build && npm run demo:designer, in the mcp-open-api repo."),
-                      ]
-            )
-        );
+        $("host-status").textContent = `Not a host config: ${error.message}`;
     }
-}
-
-$("connect").addEventListener("submit", (event) => {
-    event.preventDefault();
-    void connect();
 });
 
-addEventListener("pagehide", () => state.mcp?.close());
-
-// Connect on arrival: the page is useless until it is, and most often no token is needed or one is remembered.
-if (location.protocol === "file:") {
-    setStatus("not connected", "off");
-    help(
-        "error",
-        el("strong", {}, "Open this page through the broker, not from the disk. "),
-        el("span", {}, "It talks to the designer at /designer/mcp on the broker's origin: http://<broker>/ui/designer/")
-    );
-} else void connect();
-
-function renderHosts() {
-    $("host").replaceChildren(...state.hosts.map((h) => el("option", { value: h.name }, h.name)));
-    renderSpecOrigins();
-    $("hosts").replaceChildren(
-        el(
-            "div",
-            { class: "table-wrap" },
-            el(
-                "table",
-                {},
-                el(
-                    "thead",
-                    {},
-                    el("tr", {}, el("th", {}, "host"), el("th", {}, "allowed targets"), el("th", {}, "secrets"), el("th", {}, "trusted keys"), el("th", {}, "published slots"))
-                ),
-                el(
-                    "tbody",
-                    {},
-                    state.hosts.map((h) =>
-                        el(
-                            "tr",
-                            {},
-                            el("td", {}, h.name),
-                            el("td", { class: "mono" }, h.allowedTargets.join(", ")),
-                            el("td", { class: "mono" }, h.secrets.join(", ") || "none"),
-                            el("td", {}, String(h.trustedKeys)),
-                            el("td", { class: "mono" }, h.published.map((p) => `${p.slot} (${p.sha256.slice(0, 12)})`).join(", ") || "none")
-                        )
-                    )
-                )
-            )
-        )
-    );
+for (const id of ["host-targets", "host-secrets"]) {
+    $(id).addEventListener("change", () => {
+        const targets = splitList($("host-targets").value);
+        const secrets = splitList($("host-secrets").value);
+        setHost(targets.length === 0 && secrets.length === 0 ? undefined : { allowedTargets: targets, secrets });
+    });
 }
+renderHostStatus();
 
-/** The origins the designer may fetch a spec from, for the chosen host. */
-/** What the chosen host allows, and what the chosen slot name will be: the two are easy to mix up. */
-function renderSpecOrigins() {
-    const host = state.hosts.find((h) => h.name === $("host").value);
-    $("spec-origins").textContent = host ? `The designer fetches only from: ${host.specOrigins.join(", ")}` : "";
-    $("host-details").textContent = host
-        ? `calls ${host.allowedTargets.join(", ") || "nothing yet"}; secrets: ${host.secrets.join(", ") || "none"}; ${host.trustedKeys} trusted key${host.trustedKeys === 1 ? "" : "s"}`
-        : "";
-    renderSlotDetails();
-}
-
-function renderSlotDetails() {
-    const host = state.hosts.find((h) => h.name === $("host").value);
-    const slot = $("slot").value.trim();
-    if (!slot) {
-        $("slot-details").textContent = "";
-        return;
-    }
-    const published = host?.published.find((p) => p.slot === slot);
-    $("slot-details").textContent =
-        `${location.origin}/${slot}/mcp${published ? `; already published by this host (${published.sha256.slice(0, 12)}): publishing replaces it` : ""}`;
-}
-
-$("host").addEventListener("change", renderSpecOrigins);
-$("slot").addEventListener("input", renderSlotDetails);
+// ── 1. Import ───────────────────────────────────────────────────────────────
 
 $("import").addEventListener("submit", async (event) => {
     event.preventDefault();
     const url = $("spec-url").value.trim();
     const file = $("spec-file").files[0];
     const pasted = $("spec-text").value.trim();
-    const base = { host: $("host").value, slot: $("slot").value.trim() };
+    const slot = $("slot").value.trim();
     const button = $("import").querySelector("button");
     try {
-        let args;
-        if (url) args = { ...base, url };
-        else if (file) args = { ...base, spec: await file.text() };
-        else if (pasted) args = { ...base, spec: pasted };
-        else throw new Error("give a URL, a file or the spec's text");
+        let spec;
+        let source;
         button.disabled = true;
-        button.textContent = url ? "Fetching..." : "Importing...";
-        const draft = await state.mcp.tool("designer_import", args);
-        $("hosts").replaceChildren(
+        if (url) {
+            button.textContent = "Fetching...";
+            const fetched = await fetchSpec(url);
+            spec = fetched.text;
+            source = fetched.url;
+        } else if (file) spec = await file.text();
+        else if (pasted) spec = pasted;
+        else throw new Error("give a URL, a file or the spec's text");
+
+        state.session = DesignSession.import({ slot, spec, ...(source ? { source } : {}), ...(state.host ? { host: state.host } : {}) });
+        state.draft = state.session.view();
+        state.binding = structuredClone(state.draft.binding);
+        state.approvals.clear();
+        $("import-result").replaceChildren(
             el(
                 "p",
                 { class: "muted" },
-                `Imported ${draft.spec.title ?? "the spec"} ${draft.spec.version ?? ""} (OpenAPI ${draft.spec.openapi})${draft.spec.source ? ` from ${draft.spec.source}` : ""}.`
+                `Imported ${state.draft.spec.title ?? "the spec"} ${state.draft.spec.version ?? ""} (OpenAPI ${state.draft.spec.openapi})${source ? ` from ${source}` : ""}: ${state.draft.operations.length} operations.`
             )
         );
-        state.draft = draft;
-        state.binding = structuredClone(draft.binding);
-        state.approvals.clear();
         for (const id of ["step-select", "step-tune", "step-try", "step-review", "step-advanced", "checks"]) show(id);
         renderOperations();
         renderSlotForm();
         renderTools();
         await update();
     } catch (error) {
-        $("hosts").replaceChildren(problemList(error));
+        $("import-result").replaceChildren(
+            problemList(
+                error instanceof TypeError && url
+                    ? new Error(`${url} could not be read from this page: the site probably does not allow cross-origin requests (CORS). Download the spec and import the file.`)
+                    : error
+            )
+        );
     } finally {
-        button.disabled = !state.mcp?.session;
+        button.disabled = false;
         button.textContent = "Import";
     }
 });
@@ -399,16 +229,19 @@ function put(target, key, value) {
 
 function renderSlotForm() {
     const b = state.binding;
-    const host = state.hosts.find((h) => h.name === state.draft.host);
-    const secrets = host?.secrets ?? [];
+    const host = state.host;
+    const setCredential = (v) => {
+        if (v) b.target.auth = { ...(b.target.auth ?? {}), secretRef: v };
+        else delete b.target.auth;
+        schedule();
+    };
     $("slot-form").replaceChildren(
         field("Title", b.title, (v) => (put(b, "title", v), schedule())),
         field("Base URL", b.target.baseUrl, (v) => ((b.target.baseUrl = v), schedule()), { placeholder: host?.allowedTargets[0] }),
-        select("Credential", b.target.auth?.secretRef ?? "", [["", "none"], ...secrets.map((s) => [s, s])], (v) => {
-            if (v) b.target.auth = { ...(b.target.auth ?? {}), secretRef: v };
-            else delete b.target.auth;
-            schedule();
-        }),
+        // With a host, its secrets; without one, any name the host will have to define.
+        host
+            ? select("Credential (secret name)", b.target.auth?.secretRef ?? "", [["", "none"], ...host.secrets.map((s) => [s, s])], setCredential)
+            : field("Credential (secret name)", b.target.auth?.secretRef, setCredential, { placeholder: "none; e.g. apiToken" }),
         field("Domain", b.governance?.domain, (v) => (setGovernance("domain", v), schedule()), { placeholder: "valves" }),
         field("Namespace", b.governance?.namespace, (v) => (setGovernance("namespace", v), schedule()), { placeholder: "/site/nord" }),
         field("Instructions for agents", b.instructions, (v) => (put(b, "instructions", v), schedule()), { wide: true, multiline: true, rows: 2 })
@@ -579,18 +412,17 @@ function schedule() {
 }
 
 async function update() {
-    // One update at a time, in order: a slow answer never overwrites a newer one.
-    state.pending = state.pending.then(async () => {
-        try {
-            state.review = await state.mcp.tool("designer_update", { draftId: state.draft.draftId, binding: state.binding });
-        } catch (error) {
-            state.review = { ok: false, diagnostics: [{ severity: "error", code: error.code ?? "designer", message: error.message }], writeTools: [] };
-        }
-        $("binding-json").value = JSON.stringify(state.binding, null, 4);
-        renderChecks();
-        await renderReview();
-    });
-    return state.pending;
+    clearTimeout(state.timer);
+    try {
+        state.review = state.session.update(structuredClone(state.binding));
+    } catch (error) {
+        state.review = { ok: false, diagnostics: [{ severity: "error", code: error.code ?? "designer", message: error.message }], writeTools: [] };
+    }
+    $("binding-json").value = JSON.stringify(state.binding, null, 4);
+    // The files prepared for the previous review no longer match it.
+    clearFiles();
+    renderChecks();
+    await renderReview();
 }
 
 function renderChecks() {
@@ -624,7 +456,7 @@ $("dry-run").addEventListener("submit", async (event) => {
     out.hidden = false;
     try {
         const args = JSON.parse($("try-args").value || "{}");
-        const plan = await state.mcp.tool("designer_dry_run", { draftId: state.draft.draftId, tool: $("try-tool").value, arguments: args });
+        const plan = state.session.dryRun($("try-tool").value, args);
         const lines = [`${plan.method} ${plan.url}`, ...Object.entries(plan.headers).map(([k, v]) => `${k}: ${v}`)];
         if (plan.body !== undefined) lines.push("", JSON.stringify(plan.body, null, 2));
         if (plan.resourcePath) lines.push("", `broker resource: ${plan.resourcePath}`);
@@ -636,21 +468,21 @@ $("dry-run").addEventListener("submit", async (event) => {
 
 // ── 6. Review, from the exact text that is signed ───────────────────────────
 
-const hex = (buffer) => [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, "0")).join("");
 const base64 = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)));
 const template = (parts) => (parts ?? []).map((p) => (typeof p === "string" ? p : `{${p.arg}}`)).join("");
 
 async function renderReview() {
     const review = state.review;
-    const publishButton = $("publish").querySelector("button");
     if (!review?.canonical) {
         $("review").replaceChildren(el("p", { class: "muted" }, "Nothing to review until the checks pass."));
         $("try-tool").replaceChildren();
-        publishButton.disabled = true;
+        state.reviewDigest = undefined;
+        state.writes = [];
+        refreshPublishButton();
         return;
     }
-    // The page hashes what it will sign, and shows what it parsed from it, not what it was told.
-    const digest = hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(review.canonical)));
+    // The page shows what it parsed from the text it signs, and hashes that text itself.
+    const digest = sha256(review.canonical);
     const manifest = JSON.parse(review.canonical);
     const writes = manifest.tools.filter((t) => !READ_METHODS.has(t.http.method)).map((t) => t.name);
     for (const name of [...state.approvals]) if (!writes.includes(name)) state.approvals.delete(name);
@@ -666,14 +498,14 @@ async function renderReview() {
             {},
             "Manifest ",
             el("code", {}, digest),
-            digest === review.sha256 ? null : el("strong", { class: "summary-error" }, " differs from the designer's hash: do not sign")
+            digest === review.sha256 ? null : el("strong", { class: "summary-error" }, " differs from the compiled hash: do not sign")
         ),
         el(
             "p",
             { class: "muted" },
             `Slot ${manifest.slot} on ${manifest.target.baseUrl}`,
             manifest.declaration ? `, domain ${manifest.declaration.domain} under ${manifest.declaration.namespace}` : ", no governance",
-            review.published ? `. Replaces ${review.published.sha256.slice(0, 12)}.` : ". First publication."
+            review.previous ? `. Compared with ${review.previous.sha256.slice(0, 12)}.` : ". Not compared with a served version."
         ),
         el(
             "p",
@@ -758,9 +590,20 @@ async function renderReview() {
 
 function refreshPublishButton() {
     const review = state.review;
-    const ready = review?.ok && state.key && state.reviewDigest === review.sha256 && state.writes.every((w) => state.approvals.has(w));
-    $("publish").querySelector("button").disabled = !ready;
+    const reviewed = review?.ok && state.reviewDigest === review.sha256 && state.writes.every((w) => state.approvals.has(w));
+    $("publish").querySelector("button[type=submit]").disabled = !(reviewed && state.key);
+    $("unsigned").disabled = !reviewed;
 }
+
+$("previous-file").addEventListener("change", async () => {
+    const file = $("previous-file").files[0];
+    try {
+        state.session?.compareWith(file ? JSON.parse(await file.text()) : undefined);
+        if (state.session) await update();
+    } catch (error) {
+        $("publish-result").replaceChildren(problemList(error));
+    }
+});
 
 $("key-file").addEventListener("change", async () => {
     const file = $("key-file").files[0];
@@ -768,6 +611,7 @@ $("key-file").addEventListener("change", async () => {
     $("publish-result").replaceChildren();
     if (file) {
         try {
+            if (!globalThis.crypto?.subtle) throw new Error("WebCrypto is only available on https or localhost");
             const pem = await file.text();
             const der = Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")), (c) => c.charCodeAt(0));
             state.key = await crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, false, ["sign"]);
@@ -780,34 +624,64 @@ $("key-file").addEventListener("change", async () => {
     refreshPublishButton();
 });
 
+/** Revokes the links of the files prepared for a previous review. */
+function clearFiles() {
+    for (const url of state.files) URL.revokeObjectURL(url);
+    state.files = [];
+    $("publish-result").replaceChildren();
+}
+
+/** Prepares the files as download links: the browser saves each where the operator chooses. */
+function offerFiles(files, signature) {
+    clearFiles();
+    const entries = [
+        [files.manifest.name, files.manifest.text, "the manifest: into the host's manifests"],
+        ...(signature ? [[`${files.manifest.name}.sig`, `${JSON.stringify(signature, null, 2)}\n`, "its signature: next to it"]] : []),
+        [files.binding.name, files.binding.text, "the binding: to recompile or edit later"],
+        [files.spec.name, files.spec.text, "the spec it was compiled from"],
+    ];
+    const links = entries.map(([name, text, what]) => {
+        const url = URL.createObjectURL(new Blob([text], { type: name.endsWith(".json") || name.endsWith(".sig") ? "application/json" : "text/plain" }));
+        state.files.push(url);
+        return el("li", {}, el("a", { href: url, download: name, class: "mono" }, name), ` ${what}`);
+    });
+    $("publish-result").replaceChildren(
+        el(
+            "div",
+            { class: "notice ok" },
+            el(
+                "strong",
+                {},
+                signature ? `Signed ${files.manifest.name} (${signature.manifest.slice(0, 12)}).` : `${files.manifest.name}, unsigned: only a host with allowUnsigned serves it.`
+            ),
+            el("ul", {}, links),
+            el(
+                "div",
+                { class: "help" },
+                "Then list the manifest in the host's mcp-open-api.json (manifests: a file, a directory, or a list) and start or restart the host: one slot per manifest."
+            )
+        )
+    );
+}
+
 $("publish").addEventListener("submit", async (event) => {
     event.preventDefault();
     const review = state.review;
     try {
+        const files = state.session.files();
         const bytes = new TextEncoder().encode(review.canonical);
-        const digest = hex(await crypto.subtle.digest("SHA-256", bytes));
+        const digest = sha256(review.canonical);
         if (digest !== review.sha256) throw new Error("the manifest's hash does not match the review: nothing was signed");
         const signature = { alg: "Ed25519", manifest: digest, signature: base64(await crypto.subtle.sign("Ed25519", state.key, bytes)) };
-        const result = await state.mcp.tool("designer_publish", {
-            draftId: state.draft.draftId,
-            sha256: digest,
-            signature,
-            approvedWriteTools: [...state.approvals],
-        });
-        $("publish-result").replaceChildren(
-            el(
-                "div",
-                { class: "notice ok" },
-                el("strong", {}, `Published ${result.slot} (${result.sha256.slice(0, 12)}) into host ${result.host}.`),
-                el("div", {}, `Next: ${result.next}.`),
-                el(
-                    "ul",
-                    {},
-                    result.files.map((f) => el("li", { class: "mono" }, f))
-                )
-            )
-        );
-        await update();
+        offerFiles(files, signature);
+    } catch (error) {
+        $("publish-result").replaceChildren(problemList(error));
+    }
+});
+
+$("unsigned").addEventListener("click", () => {
+    try {
+        offerFiles(state.session.files());
     } catch (error) {
         $("publish-result").replaceChildren(problemList(error));
     }

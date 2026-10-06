@@ -1,7 +1,7 @@
 import type { McpToolResult } from "@cyanmycelium/mcp-core";
 import { AccessUnavailableError, type IAccessContext, type IAccessDecision, type IAccessGuard } from "@cyanmycelium/mcp-uns";
 import { HTTP_METHODS, MANIFEST_VERSION, type IManifest, type IManifestTool, type ManifestAuth } from "../manifest/manifest.types";
-import { HttpCallError, HttpPool } from "./http";
+import { HttpCallError, NO_NETWORK, type IHttpTransport } from "./transport";
 import { compileProjection, type IProjection } from "./projection";
 import { compileBody, compileParams, compileTemplate, templateArgs, type Args } from "./template";
 import { compileValidator, type Validator } from "./validator";
@@ -16,8 +16,12 @@ export interface IEngineOptions {
     readonly secrets?: SecretResolver;
     /** Origins (`https://host:port`) the manifest may call. When given, any other `baseUrl` refuses the load. */
     readonly allowedTargets?: readonly string[];
-    /** Shared between engines to share connections; one per engine otherwise. */
-    readonly pool?: HttpPool;
+    /**
+     * How requests are sent: in Node, an `HttpPool`, shared between engines to
+     * share connections. Without one the engine loads and plans calls but
+     * sends none, which is all a designer needs.
+     */
+    readonly pool?: IHttpTransport;
 }
 
 /** Every problem found while loading a manifest, not only the first. */
@@ -85,8 +89,7 @@ export class ManifestEngine {
     readonly manifest: IManifest;
     private readonly _tools = new Map<string, ICompiledTool>();
     private readonly _guard?: IAccessGuard;
-    private readonly _pool: HttpPool;
-    private readonly _ownsPool: boolean;
+    private readonly _pool: IHttpTransport;
     private readonly _base: URL;
     private readonly _fixedHeaders: Readonly<Record<string, string>>;
     private readonly _authQuery?: [string, string];
@@ -164,8 +167,7 @@ export class ManifestEngine {
         }
 
         if (problems.length > 0) throw new ManifestLoadError(problems);
-        this._pool = options.pool ?? new HttpPool();
-        this._ownsPool = !options.pool;
+        this._pool = options.pool ?? NO_NETWORK;
     }
 
     /** The tools, as `tools/list` shows them. */
@@ -211,7 +213,7 @@ export class ManifestEngine {
         const request = this._request(compiled, args, context);
         if ("error" in request) return request.error;
         const { url, headers, body: bodyValue } = request;
-        const body = bodyValue === undefined ? undefined : Buffer.from(JSON.stringify(bodyValue));
+        const body = bodyValue === undefined ? undefined : new TextEncoder().encode(JSON.stringify(bodyValue));
 
         let response;
         try {
@@ -243,7 +245,7 @@ export class ManifestEngine {
                 return errorResult("invalid_response", `the API answered ${response.contentType || "an untyped body"}, not JSON`);
             }
             try {
-                parsed = JSON.parse(response.body.toString("utf8"));
+                parsed = JSON.parse(new TextDecoder().decode(response.body));
             } catch {
                 report("failure", "invalid_response");
                 return errorResult("invalid_response", "the API answered malformed JSON");
@@ -283,10 +285,8 @@ export class ManifestEngine {
         };
     }
 
-    /** Closes the connections this engine opened. */
-    close(): void {
-        if (this._ownsPool) this._pool.close();
-    }
+    /** Releases the engine. Its transport belongs to whoever gave it, who closes it. */
+    close(): void {}
 
     /** The request of one call: every piece was prepared at load. */
     private _request(compiled: ICompiledTool, args: Args, context?: IAccessContext): { url: URL; headers: Record<string, string>; body?: unknown } | { error: McpToolResult } {
@@ -315,7 +315,7 @@ export class ManifestEngine {
             case "bearer":
                 return { headers: { authorization: `Bearer ${secret}` } };
             case "basic":
-                return { headers: { authorization: `Basic ${Buffer.from(secret).toString("base64")}` } };
+                return { headers: { authorization: `Basic ${base64(secret)}` } };
             case "apiKey":
                 return auth.in === "header" ? { headers: { [auth.name.toLowerCase()]: secret } } : { headers: {}, query: [auth.name, secret] };
         }
@@ -340,11 +340,18 @@ function constraintViolation(constraints: object, valueArg: string | undefined, 
     return null;
 }
 
+/** Base64 of a string's UTF-8 bytes, in Node and in a browser. */
+function base64(text: string): string {
+    let binary = "";
+    for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+    return btoa(binary);
+}
+
 /** `title` and `detail` of an RFC 9457 problem; nothing from any other error body, which may hold anything. */
-function problemDetails(contentType: string, body: Buffer): Record<string, unknown> {
+function problemDetails(contentType: string, body: Uint8Array): Record<string, unknown> {
     if (!/application\/problem\+json/i.test(contentType)) return {};
     try {
-        const p = JSON.parse(body.toString("utf8")) as { title?: unknown; detail?: unknown };
+        const p = JSON.parse(new TextDecoder().decode(body)) as { title?: unknown; detail?: unknown };
         return { ...(typeof p.title === "string" ? { title: p.title.slice(0, 200) } : {}), ...(typeof p.detail === "string" ? { detail: p.detail.slice(0, 500) } : {}) };
     } catch {
         return {};

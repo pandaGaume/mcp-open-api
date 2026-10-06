@@ -1,164 +1,115 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startTestBroker, type ITestBroker } from "@cyanmycelium/mcp-broker/testing";
+import { startTestBroker } from "@cyanmycelium/mcp-broker/testing";
 import type { IBinding } from "@cyanmycelium/mcp-open-api";
 import { compile } from "@cyanmycelium/mcp-open-api/compiler";
-import { DESIGNER_UI_DIR, DesignerError, Workbench, startDesigner, type IDesignHost, type IPublishEvent, type IRunningDesigner } from "@cyanmycelium/mcp-open-api/designer";
+import { DesignSession, DesignerError, fetchSpec, hostProfileOf, type IHostProfile } from "@cyanmycelium/mcp-open-api/designer";
 import { OpenApiHost, generateSigningKeys, signManifest } from "@cyanmycelium/mcp-open-api/host";
 import { ValveApi } from "./fixtures/valve.api";
 import { McpHttpClient } from "./fixtures/mcp.client";
-import { valveBinding, valveSpec } from "./fixtures/valve.binding";
-
-const operatorKeys = generateSigningKeys();
-
-/** A host folder and its config, as `mcp-open-api serve` would read them. */
-function hostFolder(api: ValveApi, name = "vannes"): IDesignHost {
-    const baseDir = mkdtempSync(join(tmpdir(), "mcp-open-api-designer-"));
-    mkdirSync(join(baseDir, "manifests"));
-    writeFileSync(join(baseDir, "operator.pub.pem"), operatorKeys.publicKeyPem);
-    return {
-        name,
-        baseDir,
-        config: {
-            broker: { url: "ws://unused/providers", secretEnv: "VANNES_PROVIDER_SECRET" },
-            manifests: "manifests",
-            trustedKeys: ["operator.pub.pem"],
-            allowedTargets: [new URL(api.baseUrl).origin],
-            secrets: { otGateway: { env: "VANNES_API_TOKEN" } },
-        },
-    };
-}
-
-/** The binding a person would reach in the Tuning step, with the draft's own spec reference. */
-function tuned(api: ValveApi, draftBinding: IBinding): IBinding {
-    return { ...valveBinding(api.baseUrl), spec: draftBinding.spec };
-}
+import { pumpBinding, valveBinding, valveSpec } from "./fixtures/valve.binding";
 
 let api: ValveApi;
+let profile: IHostProfile;
 
 beforeAll(async () => {
     api = new ValveApi();
     await api.start();
+    profile = hostProfileOf({ allowedTargets: [new URL(api.baseUrl).origin], secrets: { otGateway: { env: "VANNES_API_TOKEN" } } }, "vannes");
 });
 
 afterAll(async () => {
     await api?.stop();
 });
 
-describe("the workbench", () => {
+/** The binding a person would reach in the Tuning step, with the draft's own spec reference. */
+const tuned = (session: DesignSession, binding: IBinding = valveBinding(api.baseUrl)): IBinding => ({ ...binding, spec: session.binding.spec });
+
+const codeOf = (fn: () => unknown): string => {
+    try {
+        fn();
+    } catch (error) {
+        return (error as DesignerError).code;
+    }
+    return "accepted";
+};
+
+describe("a design session", () => {
     it("imports a spec as candidates: nothing exposed, write operations flagged, locations listed", () => {
-        const host = hostFolder(api);
-        const draft = new Workbench([host]).importSpec({ host: "vannes", slot: "vannes", spec: valveSpec });
-        expect(draft.binding.tools).toEqual({});
-        expect(draft.binding.target.auth).toEqual({ secretRef: "otGateway" });
-        const ops = Object.fromEntries(draft.operations.map((o) => [o.key, o]));
+        const session = DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile });
+        const view = session.view();
+        expect(view.binding.tools).toEqual({});
+        expect(view.binding.target.auth).toEqual({ secretRef: "otGateway" });
+        const ops = Object.fromEntries(view.operations.map((o) => [o.key, o]));
         expect(ops.setValvePosition).toMatchObject({ method: "PUT", write: true, locations: ["path.id", "body.position", "body.mode"] });
         expect(ops.getValve).toMatchObject({ write: false, locations: ["path.id", "query.debug"] });
     });
 
-    it("suggests the spec's server only when the host allows its origin", () => {
-        const draft = new Workbench([hostFolder(api)]).importSpec({ host: "vannes", slot: "vannes", spec: valveSpec });
-        // The spec names https://ot-gw.local, which this host does not allow.
-        expect(draft.binding.target.baseUrl).toBe(new URL(api.baseUrl).origin);
+    it("suggests the spec's server, unless the host does not allow its origin", () => {
+        expect(DesignSession.import({ slot: "vannes", spec: valveSpec }).binding.target.baseUrl).toBe("https://ot-gw.local/api/v2");
+        expect(DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile }).binding.target.baseUrl).toBe(new URL(api.baseUrl).origin);
     });
 
-    it("refuses a spec that is not OpenAPI, and an unknown host", () => {
-        const bench = new Workbench([hostFolder(api)]);
-        expect(() => bench.importSpec({ host: "vannes", slot: "vannes", spec: '{"swagger":"2.0"}' })).toThrow(DesignerError);
-        expect(() => bench.importSpec({ host: "nope", slot: "vannes", spec: valveSpec })).toThrow(/no host "nope"/);
+    it("refuses what is not OpenAPI 3, and says so for Swagger 2.0", () => {
+        expect(codeOf(() => DesignSession.import({ slot: "vannes", spec: '{"swagger":"2.0","info":{},"paths":{}}' }))).toBe("swagger_2");
+        expect(codeOf(() => DesignSession.import({ slot: "vannes", spec: "{}" }))).toBe("spec_invalid");
+        expect(codeOf(() => DesignSession.import({ slot: "Vannes", spec: valveSpec }))).toBe("invalid_slot");
     });
 
-    it("reviews a draft: compiler diagnostics, write tools, and the host's own refusals", () => {
-        const bench = new Workbench([hostFolder(api)]);
-        const draft = bench.importSpec({ host: "vannes", slot: "vannes", spec: valveSpec });
-
-        const good = bench.update(draft.draftId, tuned(api, draft.binding));
+    it("reviews a draft: compiler diagnostics, write tools, and what the host would refuse", () => {
+        const session = DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile });
+        const good = session.update(tuned(session));
         expect(good.ok).toBe(true);
         expect(good.writeTools).toEqual(["ouvrir_vanne"]);
         expect(good.diff).toEqual({ added: ["lire_vanne", "lister_vannes", "ouvrir_vanne"], removed: [], changed: [], slot: [] });
 
-        const elsewhere = bench.update(draft.draftId, { ...tuned(api, draft.binding), target: { baseUrl: "https://ot-gw.local/api/v2", auth: { secretRef: "otGateway" } } });
-        expect(elsewhere.ok).toBe(false);
+        const elsewhere = session.update({ ...tuned(session), target: { baseUrl: "https://ot-gw.local/api/v2", auth: { secretRef: "otGateway" } } });
         expect(elsewhere.diagnostics.map((d) => d.code)).toContain("host.refused");
-
-        const noSecret = bench.update(draft.draftId, { ...tuned(api, draft.binding), target: { baseUrl: api.baseUrl, auth: { secretRef: "other" } } });
+        const noSecret = session.update({ ...tuned(session), target: { baseUrl: api.baseUrl, auth: { secretRef: "other" } } });
         expect(noSecret.diagnostics.find((d) => d.code === "host.refused")?.message).toContain('no secret "other"');
+
+        session.setHost(undefined);
+        const unchecked = session.update({ ...tuned(session), target: { baseUrl: "https://ot-gw.local/api/v2", auth: { secretRef: "other" } } });
+        expect(unchecked.ok).toBe(true);
+        expect(unchecked.diagnostics.map((d) => d.code)).toContain("host.unchecked");
     });
 
-    it("dry-runs a call: the request as the engine builds it, with a placeholder for the credential", () => {
-        const bench = new Workbench([hostFolder(api)]);
-        const draft = bench.importSpec({ host: "vannes", slot: "vannes", spec: valveSpec });
-        bench.update(draft.draftId, tuned(api, draft.binding));
-        const plan = bench.dryRun(draft.draftId, "ouvrir_vanne", { vanne: "V-012", pourcent: 40 });
-        expect(plan).toMatchObject({
-            method: "PUT",
-            url: `${api.baseUrl}/valves/V-012/position`,
-            body: { position: 40, mode: "manual" },
-            resourcePath: "/site/nord/valves/V-012",
-        });
-        expect(plan.headers.authorization).toBe("Bearer <secret:otGateway>");
-        expect(api.received).toEqual([]);
-        expect(() => bench.dryRun(draft.draftId, "ouvrir_vanne", { vanne: "V-012", pourcent: 140 })).toThrow(/fails "maximum"/);
-    });
-
-    it("publishes only a reviewed, approved manifest signed by a key the host trusts", () => {
-        const host = hostFolder(api);
-        const events: IPublishEvent[] = [];
-        const bench = new Workbench([host], { onPublish: (e) => events.push(e) });
-        const draft = bench.importSpec({ host: "vannes", slot: "vannes", spec: valveSpec });
-        const review = bench.update(draft.draftId, tuned(api, draft.binding));
-        const manifest = JSON.parse(review.canonical!);
-        const signature = signManifest(manifest, operatorKeys.privateKeyPem);
-        const request = { sha256: review.sha256!, signature, approvedWriteTools: ["ouvrir_vanne"] };
-
-        const refusal = (fn: () => unknown): string => {
-            try {
-                fn();
-            } catch (error) {
-                return (error as DesignerError).code;
-            }
-            return "accepted";
-        };
-        expect(refusal(() => bench.publish(draft.draftId, { ...request, approvedWriteTools: [] }))).toBe("not_approved");
-        expect(refusal(() => bench.publish(draft.draftId, { ...request, signature: signManifest(manifest, generateSigningKeys().privateKeyPem) }))).toBe("bad_signature");
-        expect(refusal(() => bench.publish(draft.draftId, { ...request, sha256: "0".repeat(64) }))).toBe("stale_review");
-        expect(existsSync(join(host.baseDir, "manifests", "vannes.json"))).toBe(false);
-
-        const result = bench.publish(draft.draftId, request);
-        expect(result.files.map((f) => f.slice(host.baseDir.length).replace(/\\/g, "/"))).toEqual([
-            "/manifests/sources/vannes.openapi.json",
-            "/manifests/sources/vannes.binding.json",
-            "/manifests/vannes.json",
-            "/manifests/vannes.json.sig",
-        ]);
-        expect(events).toHaveLength(1);
-        expect(events[0]).toMatchObject({ host: "vannes", slot: "vannes", sha256: review.sha256, approvedWriteTools: ["ouvrir_vanne"] });
-
-        // The sources recompile into the very manifest that was signed.
-        const binding = readFileSync(join(host.baseDir, "manifests", "sources", "vannes.binding.json"), "utf8");
-        const spec = readFileSync(join(host.baseDir, "manifests", "sources", "vannes.openapi.json"));
-        expect(compile({ binding, spec }).sha256).toBe(review.sha256);
-
-        // A new review sees it as published, and diffs against it.
-        const edited = bench.update(draft.draftId, {
-            ...tuned(api, draft.binding),
-            tools: { ...tuned(api, draft.binding).tools, getValve: { ...tuned(api, draft.binding).tools!.getValve!, description: "Reads one valve." } },
-        });
-        expect(edited.published?.sha256).toBe(review.sha256);
+    it("diffs against the version a host serves today", () => {
+        const session = DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile });
+        const first = session.update(tuned(session));
+        session.compareWith(JSON.parse(first.canonical!));
+        const binding = tuned(session);
+        const edited = session.update({ ...binding, tools: { ...binding.tools, getValve: { ...binding.tools!.getValve!, description: "Reads one valve." } } });
+        expect(edited.previous?.sha256).toBe(first.sha256);
         expect(edited.diff).toEqual({ added: [], removed: [], changed: [{ tool: "lire_vanne", fields: ["description"] }], slot: [] });
     });
 
-    it("ships the Tier 4 page", () => {
-        for (const file of ["index.html", "designer.js", "designer.css"]) expect(existsSync(join(DESIGNER_UI_DIR, file))).toBe(true);
-        expect(readFileSync(join(DESIGNER_UI_DIR, "index.html"), "utf8")).not.toMatch(/<script>|style="/);
+    it("dry-runs a call: the request as the engine builds it, credentials as placeholders, nothing sent", () => {
+        const session = DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile });
+        session.update(tuned(session));
+        const plan = session.dryRun("ouvrir_vanne", { vanne: "V-012", pourcent: 40 });
+        expect(plan).toMatchObject({ method: "PUT", url: `${api.baseUrl}/valves/V-012/position`, body: { position: 40, mode: "manual" }, resourcePath: "/site/nord/valves/V-012" });
+        expect(plan.headers.authorization).toBe("Bearer <secret:otGateway>");
+        expect(api.received).toEqual([]);
+        expect(codeOf(() => session.dryRun("ouvrir_vanne", { vanne: "V-012", pourcent: 140 }))).toBe("invalid_arguments");
+    });
+
+    it("produces the manifest and sources that recompile into it, and nothing while it has errors", () => {
+        const session = DesignSession.import({ slot: "vannes", spec: valveSpec, host: profile });
+        session.update({ ...tuned(session), target: { baseUrl: "https://ot-gw.local/api/v2", auth: { secretRef: "otGateway" } } });
+        expect(codeOf(() => session.files())).toBe("not_ready");
+        const review = session.update(tuned(session));
+        const files = session.files();
+        expect(files.manifest.name).toBe("vannes.json");
+        expect(compile({ binding: files.binding.text, spec: files.spec.text }).sha256).toBe(review.sha256);
     });
 });
 
-describe("importing by URL", () => {
+describe("fetching a spec by URL", () => {
     type Route = (res: ServerResponse) => void;
     const json =
         (body: unknown): Route =>
@@ -182,8 +133,6 @@ describe("importing by URL", () => {
         servers.push(server);
         return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits };
     };
-    const relative = JSON.parse(valveSpec);
-    relative.servers = [{ url: "/api/v2" }];
 
     let docs: { origin: string; hits: string[] };
     let elsewhere: { origin: string; hits: string[] };
@@ -191,13 +140,11 @@ describe("importing by URL", () => {
         elsewhere = await serve({ "/openapi.json": json(valveSpec) });
         docs = await serve({
             "/spec.json": json(valveSpec),
-            "/relative.json": json(relative),
             "/ui/": html('<html><script src="./swagger-ui-bundle.js"></script><script src="./swagger-initializer.js"></script></html>'),
             "/ui/swagger-initializer.js": json('window.ui = SwaggerUIBundle({ url: "/spec.json", dom_id: "#swagger-ui" });'),
-            "/redoc/": html('<html><redoc spec-url="../relative.json"></redoc></html>'),
+            "/redoc/": html('<html><redoc spec-url="../spec.json"></redoc></html>'),
             "/portal/": html("<html><body>API reference</body></html>"),
             "/openapi.json": json(valveSpec),
-            "/legacy/": html("<html></html>"),
             "/legacy/swagger.json": json({ swagger: "2.0", info: { title: "old", version: "1" }, paths: {} }),
             "/away": redirect(`${elsewhere.origin}/openapi.json`),
             "/big.json": json(`{"openapi":"3.1.0","x":"${"a".repeat(2048)}"}`),
@@ -206,105 +153,92 @@ describe("importing by URL", () => {
     afterAll(() => {
         for (const s of servers) s.close();
     });
-
-    const bench = (specOrigins: string[] = [docs.origin], maxSpecBytes?: number): Workbench => {
-        const host = hostFolder(api);
-        return new Workbench([host], { specOrigins, ...(maxSpecBytes ? { maxSpecBytes } : {}) });
-    };
-    const code = async (p: Promise<unknown>): Promise<string> =>
+    const code = (p: Promise<unknown>): Promise<string> =>
         p.then(
             () => "accepted",
             (e: DesignerError) => e.code
         );
 
-    it("fetches a spec, and resolves its relative servers against where it came from", async () => {
-        const draft = await bench([docs.origin, new URL(api.baseUrl).origin]).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/spec.json` });
-        expect(draft.spec.source).toBe(`${docs.origin}/spec.json`);
-        expect(draft.operations.map((o) => o.key).sort()).toEqual(["getValve", "listValves", "setValvePosition"]);
+    it("fetches a spec, or finds it behind a Swagger UI page, a ReDoc page, or at a well-known path", async () => {
+        expect((await fetchSpec(`${docs.origin}/spec.json`)).url).toBe(`${docs.origin}/spec.json`);
+        expect((await fetchSpec(`${docs.origin}/ui/`)).url).toBe(`${docs.origin}/spec.json`);
+        expect((await fetchSpec(`${docs.origin}/redoc/`)).url).toBe(`${docs.origin}/spec.json`);
+        expect((await fetchSpec(`${docs.origin}/portal/`)).url).toBe(`${docs.origin}/openapi.json`);
     });
 
-    it("finds the spec behind a Swagger UI page, a ReDoc page, or at a well-known path", async () => {
-        const b = bench();
-        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/ui/` })).spec.source).toBe(`${docs.origin}/spec.json`);
-        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/redoc/` })).spec.source).toBe(`${docs.origin}/relative.json`);
-        expect((await b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/portal/` })).spec.source).toBe(`${docs.origin}/openapi.json`);
+    it("resolves the spec's relative servers against where it came from", async () => {
+        const relative = JSON.parse(valveSpec);
+        relative.servers = [{ url: "/api/v2" }];
+        const session = DesignSession.import({ slot: "vannes", spec: JSON.stringify(relative), source: `${docs.origin}/spec.json` });
+        expect(session.binding.target.baseUrl).toBe(`${docs.origin}/api/v2`);
     });
 
-    it("says so when it finds only Swagger 2.0", async () => {
-        const b = bench();
-        await expect(b.importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/legacy/swagger.json` })).rejects.toThrow(/Swagger 2\.0/);
+    it("says so when the URL is a Swagger 2.0 description", async () => {
+        await expect(fetchSpec(`${docs.origin}/legacy/swagger.json`)).rejects.toThrow(/Swagger 2\.0/);
     });
 
-    it("contacts no origin outside the host's targets and the spec origins, redirects included", async () => {
+    it("with an allow-list, contacts no other origin, redirects included", async () => {
         const before = elsewhere.hits.length;
-        expect(await code(bench([]).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/spec.json` }))).toBe("origin_not_allowed");
-        expect(await code(bench().importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/away` }))).toBe("origin_not_allowed");
-        expect(await code(bench().importUrl({ host: "vannes", slot: "vannes", url: "file:///etc/passwd" }))).toBe("invalid_url");
+        expect(await code(fetchSpec(`${docs.origin}/spec.json`, { allowedOrigins: [] }))).toBe("origin_not_allowed");
+        expect(await code(fetchSpec(`${docs.origin}/away`, { allowedOrigins: [docs.origin] }))).toBe("origin_not_allowed");
+        expect(await code(fetchSpec("file:///etc/passwd"))).toBe("invalid_url");
         expect(elsewhere.hits.length).toBe(before);
     });
 
     it("caps the size of what it reads", async () => {
-        expect(await code(bench([docs.origin], 1024).importUrl({ host: "vannes", slot: "vannes", url: `${docs.origin}/big.json` }))).toBe("spec_too_large");
+        expect(await code(fetchSpec(`${docs.origin}/big.json`, { maxBytes: 1024 }))).toBe("spec_too_large");
     });
 });
 
-describe("the designer, behind a broker", () => {
-    let broker: ITestBroker;
-    let designer: IRunningDesigner;
-    let host: IDesignHost;
-    let served: OpenApiHost | undefined;
+describe("from the page to the broker", () => {
+    it("designs, signs, and a host opens one slot per manifest it is given", async () => {
+        const keys = generateSigningKeys();
+        const work = mkdtempSync(join(tmpdir(), "mcp-open-api-design-"));
+        writeFileSync(join(work, "operator.pub.pem"), keys.publicKeyPem);
 
-    beforeAll(async () => {
-        broker = await startTestBroker({
+        // What the page does: design, then sign the canonical text and save the files.
+        for (const binding of [valveBinding(api.baseUrl), pumpBinding(api.baseUrl)]) {
+            const session = DesignSession.import({
+                slot: binding.slot,
+                spec: valveSpec,
+                host: { allowedTargets: [new URL(api.baseUrl).origin], secrets: ["otGateway", "pumpGateway"] },
+            });
+            expect(session.update({ ...binding, spec: session.binding.spec }).ok).toBe(true);
+            const files = session.files();
+            writeFileSync(join(work, files.manifest.name), files.manifest.text);
+            writeFileSync(join(work, `${files.manifest.name}.sig`), JSON.stringify(signManifest(JSON.parse(files.manifest.text), keys.privateKeyPem)));
+        }
+
+        const broker = await startTestBroker({
             callers: { operator: { groups: ["operators"] } },
-            providers: { "openapi-designer": {}, "openapi-vannes": { allowedResources: ["/site/nord/**"] } },
+            providers: { "openapi-host": { allowedResources: ["/site/nord/**"] } },
             policy: {
-                slotResources: { designer: "/designer", vannes: "/site/nord/vannes" },
-                roles: { operator: { capabilities: ["mcp.tools.call", "mcp.tools.list", "valves.read", "valves.write"] } },
-                assignments: [
-                    { id: "operators", subject: "group:operators", role: "operator", resource: "/site/**" },
-                    { id: "designers", subject: "group:operators", role: "operator", resource: "/designer" },
-                ],
+                slotResources: { vannes: "/site/nord/vannes", pompes: "/site/nord/pompes" },
+                roles: { operator: { capabilities: ["mcp.tools.call", "mcp.tools.list", "valves.read", "valves.write", "pumps.read"] } },
+                assignments: [{ id: "operators", subject: "group:operators", role: "operator", resource: "/site/**" }],
             },
         });
-        host = hostFolder(api);
-        designer = await startDesigner({ broker: { url: broker.providersUrl, secretEnv: "DESIGNER_SECRET" }, hosts: { vannes: "unused" } }, [host], {
-            env: { DESIGNER_SECRET: broker.providerSecret("openapi-designer") },
-        });
-    });
-
-    afterAll(async () => {
-        await served?.stop();
-        await designer?.stop();
-        await broker?.stop();
-    });
-
-    it("takes an OpenAPI spec to a governed slot: import, tune, dry run, sign, publish, serve", async () => {
-        const client = new McpHttpClient(broker.mcpUrl("designer"), broker.bearer("operator"));
-        const tools = (await client.request("tools/list")).result.tools.map((t: { name: string }) => t.name);
-        expect(tools).toContain("designer_publish");
-
-        const draft = (await client.callTool("designer_import", { host: "vannes", slot: "vannes", spec: valveSpec })).structuredContent;
-        const review = (await client.callTool("designer_update", { draftId: draft.draftId, binding: tuned(api, draft.binding) })).structuredContent;
-        expect(review.ok).toBe(true);
-        const plan = (await client.callTool("designer_dry_run", { draftId: draft.draftId, tool: "lire_vanne", arguments: { vanne: "V-012" } })).structuredContent;
-        expect(plan.url).toBe(`${api.baseUrl}/valves/V-012`);
-
-        // What the page does in the browser: sign the canonical text with the operator's key.
-        const signature = signManifest(JSON.parse(review.canonical), operatorKeys.privateKeyPem);
-        const unapproved = await client.callTool("designer_publish", { draftId: draft.draftId, sha256: review.sha256, signature, approvedWriteTools: [] });
-        expect(unapproved.isError).toBe(true);
-        expect(JSON.parse(unapproved.content[0]!.text).error.code).toBe("not_approved");
-        const published = await client.callTool("designer_publish", { draftId: draft.draftId, sha256: review.sha256, signature, approvedWriteTools: ["ouvrir_vanne"] });
-        expect(published.structuredContent).toMatchObject({ slot: "vannes", sha256: review.sha256 });
-
-        // The host, restarted, serves what was signed, under the broker's governance.
-        served = await new OpenApiHost({ ...host.config, broker: { url: broker.providersUrl, secretEnv: "VANNES_PROVIDER_SECRET" } }, host.baseDir, {
-            VANNES_PROVIDER_SECRET: broker.providerSecret("openapi-vannes"),
-            VANNES_API_TOKEN: "token",
-        }).start();
-        expect(served.refused).toEqual([]);
-        const vannes = new McpHttpClient(broker.mcpUrl("vannes"), broker.bearer("operator"));
-        expect((await vannes.callTool("ouvrir_vanne", { vanne: "V-001", pourcent: 30 })).structuredContent).toEqual({ id: "V-001", position: 30 });
+        const host = await new OpenApiHost(
+            {
+                broker: { url: broker.providersUrl, secretEnv: "HOST_SECRET" },
+                manifests: ["vannes.json", "pompes.json", "missing.json"],
+                trustedKeys: ["operator.pub.pem"],
+                allowedTargets: [new URL(api.baseUrl).origin],
+                secrets: { otGateway: { env: "OT" }, pumpGateway: { env: "PUMPS" } },
+            },
+            work,
+            { HOST_SECRET: broker.providerSecret("openapi-host"), OT: "ot-token", PUMPS: "pump-token" }
+        ).start();
+        try {
+            expect(host.slots.map((s) => s.slot)).toEqual(["vannes", "pompes"]);
+            expect(host.refused).toEqual([{ file: "missing.json", reasons: ["not found"] }]);
+            const vannes = new McpHttpClient(broker.mcpUrl("vannes"), broker.bearer("operator"));
+            expect((await vannes.callTool("ouvrir_vanne", { vanne: "V-001", pourcent: 30 })).structuredContent).toEqual({ id: "V-001", position: 30 });
+            const pompes = new McpHttpClient(broker.mcpUrl("pompes"), broker.bearer("operator"));
+            expect((await pompes.callTool("lire_pompe", { pompe: "V-001" })).isError).toBeFalsy();
+        } finally {
+            await host.stop();
+            await broker.stop();
+        }
     });
 });

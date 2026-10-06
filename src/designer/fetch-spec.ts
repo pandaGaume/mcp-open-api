@@ -2,9 +2,14 @@ import { parseSpec } from "../compiler/spec";
 import { DesignerError } from "./errors";
 
 export interface ISpecFetchOptions {
-    /** Origins (`https://host:port`) the designer may fetch from; anything else, redirects included, is refused. */
-    readonly allowedOrigins: readonly string[];
-    readonly maxBytes: number;
+    /**
+     * Origins (`https://host:port`) that may be contacted; anything else, redirects
+     * included, is refused. For a server that fetches on behalf of others; a
+     * browser page leaves it out, the browser's same-origin rules apply.
+     */
+    readonly allowedOrigins?: readonly string[];
+    /** Default 5 MB. */
+    readonly maxBytes?: number;
     /** Per request. Default 10 s. */
     readonly timeoutMs?: number;
 }
@@ -26,10 +31,11 @@ type Kind = "openapi3" | "swagger2" | "other";
 /**
  * Fetches an OpenAPI description by URL. A URL that answers a page (Swagger UI,
  * ReDoc, a docs portal) is searched for the spec it loads, then the usual
- * locations of its origin are tried. Only allowed origins are ever contacted:
- * the designer must not become a way to reach any address its network can.
+ * locations of its origin are tried. With `allowedOrigins`, no other origin is
+ * ever contacted: a server must not become a way to reach any address its
+ * network can.
  */
-export async function fetchSpec(url: string, options: ISpecFetchOptions): Promise<IFetchedSpec> {
+export async function fetchSpec(url: string, options: ISpecFetchOptions = {}): Promise<IFetchedSpec> {
     const tried: string[] = [];
     const start = allowed(url, options);
     let swagger2: string | undefined;
@@ -71,13 +77,17 @@ export async function fetchSpec(url: string, options: ISpecFetchOptions): Promis
     }
 
     for (const candidate of candidates) {
-        if (!options.allowedOrigins.includes(candidate.origin)) continue;
+        if (!permits(options, candidate.origin)) continue;
         const found = await attempt(candidate);
         if (found?.kind === "openapi3") return { text: found.text, url: found.url, tried };
     }
 
     if (swagger2) throw swagger2Error(swagger2);
-    throw new DesignerError("spec_not_found", `no OpenAPI 3 description found from ${start.href}`, tried);
+    throw new DesignerError(
+        "spec_not_found",
+        `no OpenAPI 3 description found from ${start.href}. A site that does not allow cross-origin requests (CORS) cannot be read from a page: download its spec and import the file`,
+        tried
+    );
 }
 
 const swagger2Error = (url: string): DesignerError =>
@@ -95,18 +105,17 @@ function allowed(url: string, options: ISpecFetchOptions): URL {
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new DesignerError("invalid_url", `only http and https URLs are fetched, not ${parsed.protocol}`);
     if (parsed.username || parsed.password) throw new DesignerError("invalid_url", "a URL with credentials is refused");
-    if (!options.allowedOrigins.includes(parsed.origin))
-        throw new DesignerError(
-            "origin_not_allowed",
-            `${parsed.origin} is not an origin this designer may fetch from; allowed: ${options.allowedOrigins.join(", ") || "none"}. Add it to the host's allowedTargets, or to specOrigins in designer.json`
-        );
+    if (!permits(options, parsed.origin))
+        throw new DesignerError("origin_not_allowed", `${parsed.origin} may not be fetched from; allowed: ${options.allowedOrigins!.join(", ") || "none"}`);
     return parsed;
 }
+
+const permits = (options: ISpecFetchOptions, origin: string): boolean => !options.allowedOrigins || options.allowedOrigins.includes(origin);
 
 function resolve(ref: string, base: URL, options: ISpecFetchOptions): URL | undefined {
     try {
         const url = new URL(ref, base);
-        return (url.protocol === "http:" || url.protocol === "https:") && options.allowedOrigins.includes(url.origin) ? url : undefined;
+        return (url.protocol === "http:" || url.protocol === "https:") && permits(options, url.origin) ? url : undefined;
     } catch {
         return undefined;
     }
@@ -140,14 +149,19 @@ function kindOf(text: string): Kind {
     return "other";
 }
 
-/** One GET, size-capped, following only redirects that stay within the allowed origins. */
+/**
+ * One GET, size-capped. With an allow-list, redirects are followed by hand and
+ * only within it; without one (a browser, where a manual redirect is opaque),
+ * the platform follows them.
+ */
 async function get(url: URL, options: ISpecFetchOptions): Promise<{ status: number; contentType: string; text: string; url: string } | undefined> {
+    const maxBytes = options.maxBytes ?? 5 * 1024 * 1024;
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
         let res: Response;
         try {
             res = await fetch(current, {
-                redirect: "manual",
+                redirect: options.allowedOrigins ? "manual" : "follow",
                 headers: { accept: "application/json, application/yaml;q=0.9, text/yaml;q=0.9, text/html;q=0.5, */*;q=0.1" },
                 signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
             });
@@ -159,12 +173,11 @@ async function get(url: URL, options: ISpecFetchOptions): Promise<{ status: numb
             await res.body?.cancel();
             if (!location) return undefined;
             const next = new URL(location, current);
-            if (!options.allowedOrigins.includes(next.origin))
-                throw new DesignerError("origin_not_allowed", `${current.href} redirects to ${next.origin}, which this designer may not fetch from`);
+            if (!permits(options, next.origin)) throw new DesignerError("origin_not_allowed", `${current.href} redirects to ${next.origin}, which may not be fetched from`);
             current = next;
             continue;
         }
-        return { status: res.status, contentType: res.headers.get("content-type") ?? "", text: await capped(res, options.maxBytes), url: current.href };
+        return { status: res.status, contentType: res.headers.get("content-type") ?? "", text: await capped(res, maxBytes), url: res.url || current.href };
     }
     throw new DesignerError("too_many_redirects", `${url.href} redirects more than ${MAX_REDIRECTS} times`);
 }
@@ -189,5 +202,11 @@ async function capped(res: Response, maxBytes: number): Promise<string> {
         }
         chunks.push(value);
     }
-    return Buffer.concat(chunks).toString("utf8");
+    const all = new Uint8Array(total);
+    let at = 0;
+    for (const chunk of chunks) {
+        all.set(chunk, at);
+        at += chunk.byteLength;
+    }
+    return new TextDecoder().decode(all);
 }

@@ -1,5 +1,7 @@
-// The designer: turns an OpenAPI spec into a signed manifest, through a draft
-// a person tunes, checks, tries and signs on the Tier 4 page. A design-time
-// entry point, like the compiler: it loads Ajv, so a host never imports it.
-export * from "./workbench";
-export * from "./designer";
+// The designer: turns an OpenAPI spec into a manifest, through a draft a
+// person tunes, checks, tries and signs. Pure: it runs in a browser page (the
+// Tier 4 page, ui/) as in Node, and touches no file and no key.
+export * from "./errors";
+export * from "./session";
+export * from "./fetch-spec";
+export { canonicalJson, sha256 } from "../compiler/canonical";

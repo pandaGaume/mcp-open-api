@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { MultiplexTransport } from "@cyanmycelium/mcp-broker-provider";
 import type { IManifest } from "../manifest/manifest.types";
 import { HttpPool } from "../runtime/http";
@@ -20,8 +20,12 @@ export interface IHostConfig {
         /** Puts every slot in `_all` too. Default false. */
         readonly aggregate?: boolean;
     };
-    /** Directory of `*.json` manifests, each with its `*.json.sig`. Relative to the config file. */
-    readonly manifests: string;
+    /**
+     * The manifests to serve, one slot each: a manifest file, a directory of
+     * `*.json` manifests, or a list of either. Each has its `<file>.sig`.
+     * Relative to the config file.
+     */
+    readonly manifests: string | readonly string[];
     /** PEM files of the Ed25519 keys a manifest may be signed with. Relative to the config file. */
     readonly trustedKeys?: readonly string[];
     /** Serve unsigned manifests. For development only; false by default. */
@@ -53,8 +57,7 @@ export function loadHostConfig(path: string): { config: IHostConfig; baseDir: st
 }
 
 /**
- * Serves every manifest of a directory as a broker slot, over one shared
- * socket. A manifest is served only if it is signed by a trusted key, calls an
+ * Opens one broker slot per manifest it is given, over one shared socket. A manifest is served only if it is signed by a trusted key, calls an
  * allowed target, has all its secrets, and its declaration is accepted; any
  * other is refused with its reasons, and the others are still served.
  */
@@ -71,26 +74,44 @@ export class OpenApiHost {
 
     async start(): Promise<this> {
         const config = this._config;
-        const dir = resolve(this._baseDir, config.manifests);
         const keys = trustedKeysFrom((config.trustedKeys ?? []).map((p) => readFileSync(resolve(this._baseDir, p), "utf8")));
         const secret = config.broker.secretEnv ? this._env[config.broker.secretEnv] : undefined;
         if (config.broker.secretEnv && !secret) throw new Error(`the provider secret variable ${config.broker.secretEnv} is not set`);
 
-        const files = readdirSync(dir)
-            .filter((f) => f.endsWith(".json"))
-            .sort();
-        for (const file of files) {
+        const paths: string[] = [];
+        for (const entry of typeof config.manifests === "string" ? [config.manifests] : config.manifests) {
+            const path = resolve(this._baseDir, entry);
+            if (!existsSync(path)) {
+                this.refused.push({ file: entry, reasons: ["not found"] });
+                continue;
+            }
+            if (statSync(path).isDirectory())
+                paths.push(
+                    ...readdirSync(path)
+                        .filter((f) => f.endsWith(".json"))
+                        .sort()
+                        .map((f) => join(path, f))
+                );
+            else paths.push(path);
+        }
+        const seen = new Set<string>();
+        for (const path of paths) {
+            const file = basename(path);
             const reasons: string[] = [];
             let manifest: IManifest;
             try {
-                manifest = JSON.parse(readFileSync(join(dir, file), "utf8")) as IManifest;
+                manifest = JSON.parse(readFileSync(path, "utf8")) as IManifest;
             } catch (error) {
                 this.refused.push({ file, reasons: [`not JSON: ${error instanceof Error ? error.message : String(error)}`] });
                 continue;
             }
+            if (seen.has(manifest.slot)) {
+                this.refused.push({ file, reasons: [`slot "${manifest.slot}" is already served by another manifest of this host`] });
+                continue;
+            }
             let signature: unknown;
             try {
-                signature = JSON.parse(readFileSync(join(dir, `${file}.sig`), "utf8"));
+                signature = JSON.parse(readFileSync(`${path}.sig`, "utf8"));
             } catch {
                 signature = undefined;
             }
@@ -119,6 +140,7 @@ export class OpenApiHost {
                     pool: this._pool,
                 });
                 this.slots.push({ file, slot: manifest.slot, served });
+                seen.add(manifest.slot);
             } catch (error) {
                 transport.close();
                 const e = error as { problems?: readonly string[]; reasons?: readonly string[]; message?: string };

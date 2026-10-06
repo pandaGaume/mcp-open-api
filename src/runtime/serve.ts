@@ -3,6 +3,7 @@ import { BrokerAccessGuard, type IBrokerAuthority } from "@cyanmycelium/mcp-uns"
 import type { IManifest } from "../manifest/manifest.types";
 import { ManifestBehavior } from "./behavior";
 import { ManifestEngine, type IEngineOptions } from "./engine";
+import { HttpPool } from "./http";
 import { opened } from "./open";
 
 /** What a broker method answers on a loopback handle (mcp-broker `BrokerMethodOutcome`). */
@@ -114,7 +115,8 @@ export async function serveManifest(host: ILoopbackHost, manifest: IManifest, op
         },
         reportResult: (report) => handle!.reportResult(report),
     };
-    const engine = new ManifestEngine(manifest, { ...options, guard: new BrokerAccessGuard(authority, { constraints: "return" }) });
+    const pool = options.pool ?? new HttpPool();
+    const engine = new ManifestEngine(manifest, { ...options, pool, guard: new BrokerAccessGuard(authority, { constraints: "return" }) });
 
     const [serverEnd, clientEnd] = LoopbackTransport.createPair();
     const server = new McpServerBuilder().withName(manifest.slot).withTransport(serverEnd).register(new ManifestBehavior(engine)).build();
@@ -123,6 +125,7 @@ export async function serveManifest(host: ILoopbackHost, manifest: IManifest, op
     const stop = async (): Promise<void> => {
         await server.stop();
         engine.close();
+        if (!options.pool) pool.close();
     };
 
     const params = declarationOf(manifest);
@@ -141,7 +144,8 @@ export async function serveManifest(host: ILoopbackHost, manifest: IManifest, op
  * identity is the provider's: its secret, its `allowedResources`.
  */
 export async function serveManifestOver(transport: IProviderTransport, manifest: IManifest, options: IServeManifestOptions = {}): Promise<IServedManifest> {
-    const engine = new ManifestEngine(manifest, { ...options, guard: new BrokerAccessGuard(transport.broker, { constraints: "return" }) });
+    const pool = options.pool ?? new HttpPool();
+    const engine = new ManifestEngine(manifest, { ...options, pool, guard: new BrokerAccessGuard(transport.broker, { constraints: "return" }) });
     const server = new McpServerBuilder().withName(manifest.slot).withTransport(transport).register(new ManifestBehavior(engine)).build();
     // The message handler is installed before the socket opens: the broker may
     // replay `initialize` the moment it does.
@@ -149,6 +153,7 @@ export async function serveManifestOver(transport: IProviderTransport, manifest:
     const stop = async (): Promise<void> => {
         await server.stop();
         engine.close();
+        if (!options.pool) pool.close();
     };
     try {
         await opened(transport, options.openTimeoutMs ?? 10_000);

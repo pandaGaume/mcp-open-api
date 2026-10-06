@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+// Pure JavaScript, so the compiler runs in a browser as it does in Node.
+import { sha256 as sha256Bytes } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 
 /**
  * JSON canonical form (RFC 8785, JCS): object keys sorted by UTF-16 code
@@ -19,4 +21,4 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** SHA-256, lowercase hex. */
-export const sha256 = (data: string | Uint8Array): string => createHash("sha256").update(data).digest("hex");
+export const sha256 = (data: string | Uint8Array): string => bytesToHex(sha256Bytes(typeof data === "string" ? utf8ToBytes(data) : data));

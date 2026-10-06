@@ -3,59 +3,55 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Slot designer</title>
+        <title>API slot designer</title>
         <link rel="stylesheet" href="designer.css" />
         <script type="module" src="designer.js"></script>
     </head>
     <body>
         <header class="bar">
             <div class="brand">
-                <strong>Slot designer</strong>
-                <span class="muted" id="slot-label"></span>
+                <strong>API slot designer</strong>
+                <span class="muted">OpenAPI to a signed mcp-open-api manifest. Everything runs in this page: nothing is sent anywhere.</span>
             </div>
-            <form id="connect" class="inline">
-                <label class="grow">
-                    <span class="sr">Operator token</span>
-                    <input id="token" type="password" autocomplete="off" placeholder="Token: leave empty when the broker has no client auth" />
-                </label>
-                <button type="submit">Connect</button>
-            </form>
-            <span id="status" class="status">not connected</span>
         </header>
 
         <main>
+            <section id="step-host" class="card">
+                <h2>Target host <span class="muted">(optional)</span></h2>
+                <p class="muted">
+                    The mcp-open-api process that will serve this manifest. Load its <code>mcp-open-api.json</code> to check the base URL and the credential against it; only its
+                    allowed targets and the names of its secrets are read, never a value.
+                </p>
+                <div class="grid">
+                    <label>Host config <input id="host-file" type="file" accept=".json" /></label>
+                    <label>Allowed targets <input id="host-targets" placeholder="https://api.example.com, https://other.example.com" /></label>
+                    <label>Secret names <input id="host-secrets" placeholder="apiToken" /></label>
+                </div>
+                <p id="host-status" class="help"></p>
+            </section>
+
             <section id="step-source" class="card">
                 <h2><span class="num">1</span> Source</h2>
-                <div id="connection-help" class="notice" hidden></div>
                 <form id="import" class="grid">
                     <label
-                        >Served by (host)
-                        <select id="host" required>
-                            <option value="">connect first</option>
-                        </select>
-                        <span class="help">The mcp-open-api process that will run this API: it holds the API's secrets and allowed targets, and serves what is signed.</span>
-                        <span id="host-details" class="help mono"></span>
-                    </label>
-                    <label
-                        >Published as (slot)
+                        >Slot
                         <input id="slot" required pattern="^[a-z][a-z0-9\-]{0,47}$" placeholder="vannes" />
-                        <span class="help">The name clients and agents see on the broker. Lowercase, digits and dashes.</span>
-                        <span id="slot-details" class="help mono"></span>
+                        <span class="help">The name clients and agents will see on the broker: lowercase, digits and dashes.</span>
                     </label>
                     <label class="wide"
-                        >From a URL: the spec, or a documentation page (Swagger UI, ReDoc) that loads it
+                        >From a URL: the spec, or a documentation page (Swagger UI, ReDoc, Scalar) that loads it
                         <input id="spec-url" type="url" placeholder="https://petstore3.swagger.io/" />
-                        <span id="spec-origins" class="muted"></span>
+                        <span class="help">Read by your browser: the site must allow cross-origin requests (CORS). If it does not, download the spec and use a file.</span>
                     </label>
                     <label class="wide">Or from a file, JSON or YAML <input id="spec-file" type="file" accept=".json,.yaml,.yml" /></label>
                     <details class="wide">
                         <summary>Or paste it</summary>
                         <textarea id="spec-text" rows="6" spellcheck="false" placeholder="openapi: 3.1.0 ..."></textarea>
                     </details>
-                    <button type="submit" disabled>Import</button>
+                    <button type="submit">Import</button>
                 </form>
-                <p class="muted">OpenAPI 3.0 and 3.1 only. A Swagger 2.0 description must be converted first.</p>
-                <div id="hosts"></div>
+                <p class="muted">OpenAPI 3.0 and 3.1. A Swagger 2.0 description must be converted first.</p>
+                <div id="import-result"></div>
             </section>
 
             <section id="step-select" class="card" hidden>
@@ -72,8 +68,8 @@
             </section>
 
             <section id="step-try" class="card" hidden>
-                <h2><span class="num">5</span> Trial</h2>
-                <p class="muted">A dry run shows the request a call would send. Nothing is sent, the broker is not asked, and credentials appear as placeholders.</p>
+                <h2><span class="num">5</span> Dry run</h2>
+                <p class="muted">The request a call would send. Nothing is sent, and credentials appear as placeholders.</p>
                 <form id="dry-run" class="grid">
                     <label
                         >Tool
@@ -86,14 +82,19 @@
             </section>
 
             <section id="step-review" class="card" hidden>
-                <h2><span class="num">6</span> Review and publication</h2>
+                <h2><span class="num">6</span> Review, sign, save</h2>
                 <p class="muted">
-                    Everything below is read from the exact text you sign. Approve each write tool, load your Ed25519 key, then sign. The key stays in this page: it is never sent.
+                    Everything below is read from the exact text you sign. Approve each write tool, load your Ed25519 key, sign: the key never leaves this page. Then save the files
+                    and give them to the host: <code>&lt;slot&gt;.json</code> and its <code>.sig</code> in its manifests, the sources to recompile it later.
                 </p>
+                <label>Compare with the version served today (optional) <input id="previous-file" type="file" accept=".json" /></label>
                 <div id="review"></div>
                 <form id="publish" class="grid">
                     <label class="wide">Your signing key (PKCS#8 PEM, from <code>mcp-open-api keygen</code>) <input id="key-file" type="file" accept=".pem" /></label>
-                    <button type="submit" disabled>Sign and publish</button>
+                    <div class="inline wide">
+                        <button type="submit" disabled>Sign and prepare the files</button>
+                        <button id="unsigned" type="button" class="secondary" disabled>Prepare unsigned (development hosts)</button>
+                    </div>
                 </form>
                 <div id="publish-result"></div>
             </section>
@@ -101,7 +102,7 @@
             <section id="step-advanced" class="card" hidden>
                 <details>
                     <summary>Binding (binding-1)</summary>
-                    <p class="muted">The source of the manifest. Edit it for what the form does not cover, or keep a copy.</p>
+                    <p class="muted">The source of the manifest. Edit it for what the form does not cover, or paste one you saved to continue a design.</p>
                     <textarea id="binding-json" rows="16" spellcheck="false"></textarea>
                     <div class="inline">
                         <button id="binding-apply" type="button">Apply</button>

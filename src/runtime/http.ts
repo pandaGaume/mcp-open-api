@@ -1,38 +1,15 @@
 import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { HttpCallError, type IHttpRequest, type IHttpResponse, type IHttpTransport } from "./transport";
 
-export interface IHttpRequest {
-    readonly method: string;
-    readonly url: URL;
-    readonly headers: Readonly<Record<string, string>>;
-    readonly body?: Buffer;
-    readonly timeoutMs: number;
-    readonly maxResponseBytes: number;
-}
-
-export interface IHttpResponse {
-    readonly status: number;
-    readonly contentType: string;
-    readonly body: Buffer;
-}
-
-/** Why a call produced no usable response. Its message never contains a header value. */
-export class HttpCallError extends Error {
-    constructor(
-        readonly code: "timeout" | "too_large" | "network" | "redirect",
-        message: string
-    ) {
-        super(message);
-        this.name = "HttpCallError";
-    }
-}
+export { HttpCallError, type IHttpRequest, type IHttpResponse, type IHttpTransport } from "./transport";
 
 /**
  * One keep-alive pool per target origin. Without connection reuse, every call
  * pays the TCP and TLS handshakes (bench/run.mjs: 0.2 ms and 27 % of the
  * throughput on loopback alone, one to three round trips over a real network).
  */
-export class HttpPool {
+export class HttpPool implements IHttpTransport {
     private readonly _http: HttpAgent;
     private readonly _https: HttpsAgent;
 

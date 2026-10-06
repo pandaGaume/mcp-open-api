@@ -10,4 +10,5 @@ export * from "./runtime/validator";
 export * from "./runtime/engine";
 export * from "./runtime/behavior";
 export * from "./runtime/serve";
-export { HttpPool, HttpCallError } from "./runtime/http";
+export { HttpPool } from "./runtime/http";
+export * from "./runtime/transport";

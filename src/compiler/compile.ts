@@ -16,6 +16,7 @@ import type {
     TemplatePart,
 } from "../manifest/manifest.types";
 import { ManifestEngine, ManifestLoadError } from "../runtime/engine";
+import { NO_NETWORK } from "../runtime/transport";
 import { canonicalJson, sha256 } from "./canonical";
 import { Diagnostics, type IDiagnostic, pointer, token } from "./diagnostics";
 import { type IOperation, type Json, type JsonObject, Spec, isObject, normalizeSchema, parseSpec, re2Accepts } from "./spec";
@@ -67,7 +68,7 @@ export function compile(input: ICompileInput): ICompileResult {
     }
     const binding = bindingDoc as IBinding;
 
-    const specBytes = typeof input.spec === "string" ? Buffer.from(input.spec, "utf8") : input.spec;
+    const specBytes = typeof input.spec === "string" ? new TextEncoder().encode(input.spec) : input.spec;
     const actual = sha256(specBytes);
     if (actual !== binding.spec.sha256) {
         diag.error("spec.sha256-mismatch", `the spec's SHA-256 is ${actual}, the binding expects ${binding.spec.sha256}: the spec changed since the binding was written`, {
@@ -77,7 +78,7 @@ export function compile(input: ICompileInput): ICompileResult {
     }
     let specDoc: unknown;
     try {
-        specDoc = parseSpec(Buffer.from(specBytes).toString("utf8"));
+        specDoc = parseSpec(new TextDecoder().decode(specBytes));
     } catch (error) {
         diag.error("spec.parse", `the spec is neither JSON nor YAML: ${error instanceof Error ? error.message : String(error)}`);
         return { diagnostics: diag.list };
@@ -138,7 +139,7 @@ export function compile(input: ICompileInput): ICompileResult {
 
     // The engine is the judge: a manifest it would refuse is never produced.
     try {
-        new ManifestEngine(manifest, { guard: openGuard(), secrets: () => "secret" }).close();
+        new ManifestEngine(manifest, { guard: openGuard(), secrets: () => "secret", pool: NO_NETWORK }).close();
     } catch (error) {
         if (!(error instanceof ManifestLoadError)) throw error;
         for (const problem of error.problems) diag.error("manifest.engine-refused", problem);
