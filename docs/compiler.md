@@ -1,10 +1,12 @@
 # Le compilateur et l'exécution
 
-Le compilateur transforme un binding et sa spec en **manifeste** : un plan d'exécution figé, que l'opérateur Tier 4 approuve et que le broker exécute. Ce document décrit la compilation, le format du manifeste, son exécution dans le broker, et comment on certifie ce qui s'exécute.
+Le compilateur transforme un binding et sa spec en **manifeste** : un plan d'exécution figé, que l'opérateur Tier 4 approuve et qu'un **hôte mcp-open-api** exécute comme un slot du broker. Ce document décrit la compilation, le format du manifeste, son exécution par l'hôte, et comment on certifie ce qui s'exécute.
+
+Le manifeste est un format de mcp-open-api : le broker ne le connaît pas. Pour lui, un hôte est un provider comme un autre, qui publie des slots et déclare ses domaines.
 
 Le format du binding est dans [binding.md](binding.md).
 
-**État (2026-10-06).** Implémentés : le compilateur (`src/compiler/`, entrée `@cyanmycelium/mcp-open-api/compiler`) et le moteur (`src/runtime/`). Le manifeste compilé depuis la spec OpenAPI de l'API de vannes de test est servi derrière un vrai broker 1.7.0 et se comporte comme le manifeste écrit à la main (`tests/compiler.test.ts`). Pas encore : l'Overlay, Arazzo, les ressources MCP, la CLI, la signature des manifestes, la seconde sortie `.mcpb`.
+**État (2026-10-06).** Implémentés : le compilateur (`src/compiler/`, entrée `@cyanmycelium/mcp-open-api/compiler`), le moteur (`src/runtime/`), l'hôte et la signature des manifestes (`src/host/`, entrée `@cyanmycelium/mcp-open-api/host`), et la CLI (`mcp-open-api compile | keygen | sign | serve`). Le manifeste compilé depuis la spec OpenAPI de l'API de vannes de test, signé, est servi par un hôte derrière un vrai broker 1.7.0 et se comporte comme le manifeste écrit à la main (`tests/compiler.test.ts`, `tests/host.test.ts`, `scripts/serve-check.mjs`). Pas encore : l'Overlay, Arazzo, les ressources MCP, les secrets lus dans mcp-vault, la seconde sortie `.mcpb`.
 
 Limites de la version 1 du compilateur, chacune signalée par un diagnostic, jamais ignorée en silence :
 
@@ -18,12 +20,12 @@ La forme canonique trie les clés des objets : les propriétés d'un `inputSchem
 
 ## En une phrase
 
-On compile **au design time** des données (le manifeste), jamais du code ; le broker les **interprète** avec un code fixe, livré et signé avec lui ; l'opérateur approuve une empreinte que n'importe qui peut recalculer.
+On compile **au design time** des données (le manifeste), jamais du code ; un hôte mcp-open-api les **interprète** avec un code fixe, livré et signé avec le paquet, et publie chaque manifeste au broker comme un slot ; l'opérateur approuve une empreinte que n'importe qui peut recalculer.
 
 ```text
-                     design time                                      broker
-binding.json ─┐                                 ┌──────────────────────────────────────────────┐
-spec (octets) ┼─> compilateur ─> manifeste ─> Tier 4 ─> signature ─> vérification ─> fermetures ─> slot
+                     design time                                hôte mcp-open-api (un processus par API)      broker
+binding.json ─┐                                 ┌──────────────────────────────────────────────────────┐
+spec (octets) ┼─> compilateur ─> manifeste ─> Tier 4 ─> signature ─> vérification ─> fermetures ─> provider ──> slot
 Overlay ──────┘   (fonction pure)  + sha256      approuve           au chargement   (aucun code généré)
 ```
 
@@ -162,9 +164,32 @@ Le moteur applique les contraintes que le broker renvoie (`allow-with-constraint
 
 Le même code, à quatre endroits : le provider `designer`, la page Tier 4 dans le navigateur (recompilation à chaque modification, diagnostics en direct), une CLI (`npx @cyanmycelium/mcp-open-api compile binding.json`, pour la CI de l'équipe qui maintient l'API), et les tests.
 
-**Le broker ne compile jamais.** Il reçoit un manifeste approuvé, le vérifie et l'exécute. Le compilateur reste ainsi hors de la base de confiance : un compilateur bogué ou compromis ne fait rien passer, puisque l'opérateur approuve le manifeste lui-même, pas le binding.
+**L'hôte ne compile jamais.** Il reçoit un manifeste approuvé et signé, le vérifie et l'exécute. Le compilateur reste ainsi hors de la base de confiance : un compilateur bogué ou compromis ne fait rien passer, puisque l'opérateur approuve le manifeste lui-même, pas le binding. Le binaire charge d'ailleurs le compilateur à la demande, pour la seule commande `compile` : le processus `serve` n'importe jamais Ajv.
 
-## L'exécution dans le broker
+## L'exécution : l'hôte mcp-open-api
+
+### Un provider, un ou plusieurs processus
+
+L'hôte (`mcp-open-api serve`, ou `OpenApiHost` dans du code) lit les manifestes d'un dossier, vérifie leurs signatures, résout leurs secrets, et publie chaque manifeste au broker comme un slot, sur **une seule socket** (`MultiplexTransport`), sous **son** identité de provider. Le broker 1.7.0 garde une déclaration par slot : un hôte sert plusieurs slots, chacun dans son domaine, sans qu'ils s'écrasent.
+
+```json
+{
+    "broker": { "url": "ws://broker.local:3000/providers", "secretEnv": "VANNES_PROVIDER_SECRET" },
+    "manifests": "manifests/vannes",
+    "trustedKeys": ["keys/operateurs-ot.pub.pem"],
+    "allowedTargets": ["https://ot-gw.local"],
+    "secrets": { "otGateway": { "env": "OT_GATEWAY_TOKEN" } }
+}
+```
+
+**Recommandation : un hôte par API.** Chaque processus a sa config, son dossier, son identité de provider (une entrée `providers` du fichier de sécurité du broker, avec ses `allowedResources`) et ses secrets.
+
+- **Moindre privilège** : le processus de l'API de vannes ne voit que le jeton de la passerelle OT ; un hôte compromis n'expose pas les secrets des autres API.
+- **Isolation** : une API lente, ou qui renvoie de grosses réponses, ne pèse que sur son processus, ni sur le broker ni sur les autres API. C'était le pire résultat du banc quand le moteur tournait dans le broker.
+- **Cycles de vie indépendants** : on redémarre l'hôte d'une API sans toucher aux autres (`tests/host.test.ts` le vérifie avec deux hôtes).
+- **Jamais le même slot dans deux hôtes** : le broker appliquerait sa règle de reprise de slot (`providerTakeover`). Des dossiers de manifestes distincts suffisent.
+
+Une application qui embarque le broker peut aussi servir un manifeste dans son propre processus, sans socket (`serveManifest`, en loopback). C'est le cas des tests et des bancs ; un déploiement utilise l'hôte.
 
 ### Interpréter, ne rien générer
 
@@ -178,14 +203,14 @@ const buildPath = (args) => parts.map((p) => (typeof p === "string" ? p : encode
 
 Chaque fermeture est du code du paquet, écrit et relu à l'avance ; le manifeste ne fait que le paramétrer. Il n'a aucun moyen d'exprimer « exécute ceci ». Tout est préparé au chargement (gabarits, plans de corps, projections, validateurs), ce que le [banc de plomberie](../bench/run.mjs) a montré nécessaire pour que la traduction reste autour de 0,3 ms par appel.
 
-### Le broker sans génération de code
+### L'hôte sans génération de code
 
-Node peut interdire la génération de code à partir de texte : `--disallow-code-generation-from-strings`. Mesuré le 2026-10-05 :
+Node peut interdire la génération de code à partir de texte : `--disallow-code-generation-from-strings`. Mesuré le 2026-10-05 et le 2026-10-06 :
 
-- le broker 1.6.1 démarre et répond normalement avec cette option : ni lui ni ses dépendances (`mcp-core`, `ws`, `jose`, `open`) ne génèrent de code ;
+- le broker 1.6.1, puis l'hôte mcp-open-api (moteur, `mcp-core`, `mcp-uns`, le paquet provider, `re2js`) fonctionnent normalement avec cette option ;
 - Ajv échoue immédiatement (`EvalError`), parce qu'il génère une fonction JavaScript par schéma.
 
-**Décision : le broker tourne avec `--disallow-code-generation-from-strings` par défaut.** Le runtime ne peut donc pas utiliser Ajv.
+**Décision : l'hôte tourne avec `--disallow-code-generation-from-strings` par défaut.** `mcp-open-api serve` se relance lui-même avec l'option s'il ne l'a pas, et annonce au démarrage `code generation: disallowed` ; `MCP_OPEN_API_ALLOW_CODE_GENERATION=1` la désactive. `scripts/serve-check.mjs` le vérifie sur le binaire construit, en CI. Le moteur ne peut donc pas utiliser Ajv.
 
 Ce que l'option garantit, et ce qu'elle ne garantit pas, mesuré aussi :
 
@@ -195,8 +220,8 @@ Ce que l'option garantit, et ce qu'elle ne garantit pas, mesuré aussi :
 
 L'option n'est donc pas un bac à sable. Elle empêche qu'une bibliothèque génère du code par accident ; la vraie garantie reste la conception de l'interpréteur, où aucune donnée du manifeste n'atteint un chemin de génération de code. Deux contrôles la complètent :
 
-- **en CI** : ni le runtime ni aucune dépendance du broker n'importe `node:vm` ou ne l'obtient par `process.getBuiltinModule()` (vérifié aujourd'hui : aucune) ;
-- **au démarrage** : le broker essaie `new Function("")`. S'il réussit alors que des manifestes sont chargés, `broker_diagnose` le signale (`code-generation-allowed`).
+- **en CI** : ni le moteur ni aucune dépendance de l'hôte n'importe `node:vm` ou ne l'obtient par `process.getBuiltinModule()` (vérifié : aucune) ;
+- **au démarrage** : l'hôte essaie `new Function("")` et annonce le résultat.
 
 Comment l'option est activée par défaut :
 
@@ -231,7 +256,7 @@ Ajv reste l'outil du design time : compilateur, CLI, CI, tests, et le bundle `.m
 
 ### Comment être sûr d'un validateur écrit pour l'occasion
 
-Le compilateur est hors de la base de confiance : ce qu'il produit est relu et se recompile. Le validateur, lui, tourne dans le broker et fait foi. Il ne se prouve pas en le relisant, mais en le **comparant à une référence** : Ajv, le validateur JSON Schema de référence en JavaScript. Quatre défenses, chacune couvrant un angle mort de la précédente.
+Le compilateur est hors de la base de confiance : ce qu'il produit est relu et se recompile. Le validateur, lui, tourne dans l'hôte et fait foi. Il ne se prouve pas en le relisant, mais en le **comparant à une référence** : Ajv, le validateur JSON Schema de référence en JavaScript. Quatre défenses, chacune couvrant un angle mort de la précédente.
 
 1. **Un sous-ensemble fermé.** Il ne connaît qu'une quinzaine de mots-clés et refuse tous les autres au chargement. Un mot-clé ignoré en silence est le bug le plus dangereux d'un validateur : il laisse tout passer sans rien dire.
 2. **La suite de tests officielle** ([JSON-Schema-Test-Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite), draft 2020-12), pour chaque mot-clé couvert : les cas limites que la communauté a déjà rencontrés.
@@ -289,7 +314,7 @@ Le module natif `re2` est plus rapide, mais il a été écarté pour ce qu'il co
 | hors ligne, derrière un proxy, ou `--ignore-scripts` | pas de binaire, ou échec de compilation | rien de particulier |
 | intégrité | le binaire téléchargé échappe à l'empreinte du lockfile, et `re2` 1.24.1 ne publie aucune empreinte : il n'est vérifié par rien, à part TLS | couvert par l'empreinte du lockfile, comme tout paquet |
 | taille et dépendances | 17 Mo, plus `node-gyp`, `nan`, `install-artifact-from-github` | 872 Ko, aucune dépendance |
-| code natif dans le broker | oui | non |
+| code natif dans l'hôte | oui | non |
 
 Pour le runtime :
 
@@ -318,18 +343,20 @@ Le moteur de `src/runtime/` a été mesuré le 2026-10-05 avec [bench/run.mjs](.
 - Le moteur coûte à peine plus que le prototype : 0,07 ms en p50, 3 % de débit à saturation. Les couches mcp-core et RE2 sont donc négligeables.
 - Le surcoût par rapport à l'HTTP direct est d'environ 0,5 ms en p50 ce jour-là, sur une machine plus chargée que lors du premier banc (le débit direct y est 30 % plus bas) : seules les comparaisons d'un même passage valent.
 - `authorize` coûte 27 % du débit à saturation, contre 17 % au premier banc. La ligne d'audit écrite à chaque décision y pèse : un puits d'audit asynchrone reste à mesurer côté broker.
-- Les grosses réponses restent le vrai risque : avec des réponses de 5 Mo admises (le banc monte `maxResponseBytes` à 8 Mo), un slot voisin passe à 46 ms en p50 et 104 ms en p99. D'où la limite à 1 Mo par défaut.
+- Les grosses réponses restent le vrai risque : avec des réponses de 5 Mo admises (le banc monte `maxResponseBytes` à 8 Mo), un slot voisin passe à 46 ms en p50 et 104 ms en p99. D'où la limite à 1 Mo par défaut, et l'hôte hors du broker : ce banc mesurait le moteur dans le processus du broker ; servi par un hôte, il ne retarde que les slots de ce même hôte.
 
 Le validateur réel (`bench/validate.mjs`) coûte 442 ns sur `ouvrir_vanne` et 10 µs sur le gros outil, contre 145 ns et 3,4 µs pour le prototype : c'est le prix de RE2 sur les `pattern`, que le prototype évaluait avec V8. Il se charge en 87 µs pour le gros schéma, à cause de la compilation des motifs RE2. Comparé à Ajv sur 100 000 schémas et 1 000 000 de valeurs (`bench/validator.fuzz.mjs`), il ne donne aucun désaccord.
 
 ### Le chargement, dans l'ordre
 
-1. Lire le manifeste et sa signature, vérifier la signature contre la clé du broker ou une clé déclarée pour ce slot dans `slotSigners`.
-2. Recalculer l'empreinte canonique et la comparer à celle qui est signée.
-3. Valider la forme (`manifest-1`), refuser une version de format inconnue.
-4. Appliquer les plafonds : nombre d'outils, profondeur et taille des schémas, longueur des `pattern`.
-5. Contrôles du broker : `baseUrl` dans `allowedTargets`, `secretRef` présent dans le fichier de sécurité, propriétaire du domaine.
-6. Construire les fermetures, enregistrer le slot, déclarer son autorisation.
+Pour chaque fichier du dossier, l'hôte :
+
+1. lit le manifeste et sa signature (`<fichier>.sig`), recalcule l'empreinte canonique, la compare à celle qui est signée, et vérifie la signature contre ses clés de confiance (`trustedKeys`) ;
+2. refuse une version de format inconnue, puis vérifie `baseUrl` dans ses `allowedTargets` et chaque `secretRef` dans ses `secrets` ;
+3. construit les fermetures ;
+4. publie le slot au broker et déclare son autorisation ; le broker vérifie le propriétaire du domaine et les `allowedResources` de l'identité.
+
+Un manifeste refusé à une étape n'est pas servi, avec ses raisons ; les autres le sont. Les plafonds (nombre d'outils, taille des schémas) restent à ajouter.
 
 ## La certification
 
@@ -337,38 +364,26 @@ Trois choses sont certifiées, chacune par son propre moyen.
 
 | quoi | comment | ce qui fait foi |
 | --- | --- | --- |
-| **le code** : interpréteur, broker | paquet npm publié avec provenance (sigstore), intégrité du lockfile ; version visible dans `broker_info` | la chaîne de publication |
+| **le code** : l'hôte et son interpréteur | paquet npm publié avec provenance (sigstore), intégrité du lockfile ; version dans le champ `compiler` du manifeste | la chaîne de publication |
 | **le manifeste** | JSON canonique, donc une empreinte `sha256` unique | l'empreinte |
 | **l'approbation Tier 4** | une signature sur cette empreinte | la clé qui signe |
 
 ### La signature
 
-Le mécanisme est celui des bundles `.mcpb`, déjà dans le broker : signature détachée Ed25519, vérifiée contre une clé publique. Un seul mécanisme de confiance pour tout ce que le broker charge et exécute.
-
-**Décision : deux sortes de clés font foi.**
-
-| clé | ce qu'elle peut signer | où elle est déclarée |
-| --- | --- | --- |
-| **la clé du broker** | tous les slots | générée par le broker, privée sur son disque ; sa clé publique est dans `broker_info` |
-| **une clé déclarée pour un slot** | ce slot seulement | le fichier de sécurité, par slot |
+Signature détachée Ed25519 (`src/host/signature.ts`), dans un fichier `<manifeste>.sig` :
 
 ```json
-{
-    "slotSigners": {
-        "vannes": ["keys/equipe-ot.pub.pem"],
-        "historique": ["keys/equipe-data.pub.pem", "keys/ci-data.pub.pem"]
-    }
-}
+{ "alg": "Ed25519", "manifest": "<sha256 du manifeste canonique>", "signature": "<base64>" }
 ```
 
-Une équipe ne peut ainsi signer que ses propres slots : la clé de l'équipe OT ne fait pas foi pour `historique`. Les clés vivent dans le fichier de sécurité, qui refuse de démarrer s'il est invalide et dont l'empreinte entre dans `policyVersion` : ajouter ou retirer un signataire est un changement de politique, tracé comme tel.
+Elle porte sur la **forme canonique** du manifeste : un fichier reformaté vérifie toujours, un fichier modifié jamais. L'hôte n'accepte que les clés de **sa** config (`trustedKeys`, des PEM Ed25519). Avec un hôte par API, chaque API a ses signataires : la clé de l'équipe OT, listée dans l'hôte des vannes, ne fait pas foi pour l'hôte de l'historien. `allowUnsigned` existe pour le développement, faux par défaut.
 
 Deux façons de publier, une seule vérification :
 
-- **par la page Tier 4** : l'opérateur approuve avec son jeton ; le broker signe le manifeste avec **sa** clé, joint l'approbation (empreinte, sujet, date, `policyVersion`), l'audite et l'écrit sur disque ;
-- **hors ligne, par un dépôt Git** : une équipe signe le manifeste dans sa CI ou sur le poste d'un responsable, avec **la clé déclarée pour ce slot** ; le broker le charge sans passer par l'API d'administration.
+- **par la page Tier 4** (à venir) : l'opérateur approuve, et le manifeste est signé avec la clé de l'opérateur ou du designer, à décider ;
+- **par un dépôt Git** : `mcp-open-api compile`, puis `mcp-open-api sign --key`, dans la CI ou sur le poste d'un responsable ; on dépose le manifeste et sa signature dans le dossier de l'hôte.
 
-Au démarrage comme à chaque publication, un manifeste dont la signature ne vérifie pas est refusé. Un fichier modifié à la main sur le disque n'est jamais chargé.
+Un manifeste dont la signature ne vérifie pas est refusé au démarrage, avec sa raison. Un fichier modifié à la main sur le disque n'est jamais chargé. Pour changer de clé, on ajoute la nouvelle aux `trustedKeys`, on re-signe, puis on retire l'ancienne : l'hôte accepte toute clé de la liste.
 
 ### La compilation reproductible
 
@@ -376,11 +391,11 @@ Le compilateur est déterministe : n'importe qui peut recompiler binding et spec
 
 ### Le pire cas
 
-Un manifeste malveillant, signé par une clé volée, ne peut qu'appeler des origines listées dans `allowedTargets`, utiliser des secrets désignés par référence qu'il ne voit jamais, et exposer des outils soumis à `authorize`, à l'audit et aux limites d'exécution. Il ne peut ni exécuter de code, ni lire un fichier, ni ouvrir une connexion arbitraire : l'interpréteur ne sait pas le faire. `--disallow-code-generation-from-strings` empêche en plus qu'une bibliothèque du broker génère du code par accident, sans être un bac à sable (`node:vm` y échappe, d'où le contrôle en CI). Une clé d'équipe volée ne compromet que les slots déclarés pour elle.
+Un manifeste malveillant, signé par une clé volée, ne peut qu'appeler des origines listées dans `allowedTargets`, utiliser des secrets désignés par référence qu'il ne voit jamais, et exposer des outils soumis à `authorize`, à l'audit et aux limites d'exécution. Il ne peut ni exécuter de code, ni lire un fichier, ni ouvrir une connexion arbitraire : l'interpréteur ne sait pas le faire. `--disallow-code-generation-from-strings` empêche en plus qu'une bibliothèque de l'hôte génère du code par accident, sans être un bac à sable (`node:vm` y échappe, d'où le contrôle en CI). Une clé volée ne compromet que les hôtes qui la listent, et un hôte compromis que son API : il ne détient que ses secrets, et le broker borne ce qu'il peut déclarer à ses `allowedResources`.
 
 ## La seconde sortie : un bundle `.mcpb` (lot ultérieur)
 
-Générer du code au design time a sa place, mais **hors du broker**. Charger du code généré dans le broker ferait reposer toute la sécurité sur une signature : un signataire ou un générateur compromis exécuterait n'importe quoi dans le processus qui détient tous les secrets. Le gain, quelques microsecondes, ne le justifie pas.
+Générer du code au design time a sa place, mais pas dans l'hôte qui interprète les manifestes. Y charger du code généré ferait reposer toute la sécurité sur une signature : un signataire ou un générateur compromis exécuterait n'importe quoi dans le processus qui détient les secrets de l'API. Le gain, quelques microsecondes, ne le justifie pas, d'autant que l'hôte tourne déjà hors du broker.
 
 Le compilateur peut en revanche produire, en option, un bundle `.mcpb` qui contient :
 
@@ -388,12 +403,12 @@ Le compilateur peut en revanche produire, en option, un bundle `.mcpb` qui conti
 - le code généré à partir de ce manifeste : validateurs Ajv *standalone*, fonctions de chemin, projections ;
 - une attestation de build reproductible : ce code est exactement `generate(manifest@<empreinte>, generator@<version>)`.
 
-Le broker sait déjà vérifier un `.mcpb` et le lancer **dans un processus séparé**, qu'on peut restreindre avec le modèle de permissions de Node (`--permission`). C'est aussi la réponse au problème des grosses réponses mesuré au banc : une API lourde tourne hors du broker et ne bloque pas les autres slots.
+Le broker sait déjà vérifier un `.mcpb` et le lancer **dans un processus séparé**, qu'on peut restreindre avec le modèle de permissions de Node (`--permission`). L'hôte mcp-open-api lui-même peut d'ailleurs être livré ainsi.
 
 | sortie | exécution | quand |
 | --- | --- | --- |
-| **manifeste** (par défaut) | interprété dans le broker, sans génération de code | le cas courant |
-| **bundle `.mcpb`** (option) | code généré, processus séparé, signé comme les autres bundles | grosses réponses, débit élevé, plus tard transformations calculées et workflows Arazzo |
+| **manifeste** (par défaut) | interprété par un hôte mcp-open-api, sans génération de code | le cas courant |
+| **bundle `.mcpb`** (option) | code généré, processus séparé, signé comme les autres bundles | débit très élevé, plus tard transformations calculées et workflows Arazzo |
 
 Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 
@@ -403,7 +418,8 @@ Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 | --- | --- | --- |
 | `yaml` | compilateur | specs en YAML |
 | Ajv | compilateur, CLI, tests, bundle `.mcpb` | validation du binding et des manifestes au design time, génération *standalone* |
-| validateur précompilé (maison) | runtime | validation des arguments dans le broker, sans génération de code |
+| validateur précompilé (maison) | runtime | validation des arguments dans l'hôte, sans génération de code |
+| `@cyanmycelium/mcp-broker-provider` | hôte | publication des slots sur une socket partagée, `broker/authorize` |
 | `re2js` | runtime, compilateur | `pattern` en temps linéaire, JavaScript pur ; le compilateur vérifie que RE2 accepte chaque motif |
 | `$ref` internes, JSON canonique (maison) | compilateur | peu de code, aucune dépendance |
 | JSONPath RFC 9535 | compilateur, avec l'Overlay | application des actions |
@@ -412,16 +428,21 @@ Dans les deux cas, l'opérateur approuve la même chose : le manifeste.
 
 | question | décision |
 | --- | --- |
-| que compile-t-on | des données (le manifeste), jamais du code chargé dans le broker |
-| qui compile | le designer, la page, la CLI, la CI ; jamais le broker |
+| que compile-t-on | des données (le manifeste), jamais du code |
+| qui compile | le designer, la page, la CLI, la CI ; jamais l'hôte |
+| qui exécute | un hôte mcp-open-api, provider du broker ; un processus par API recommandé. Le broker ne connaît pas le manifeste |
 | restriction des schémas | par composition `allOf` spec et binding, sans preuve |
-| génération de code dans le broker | `--disallow-code-generation-from-strings` par défaut : le CLI se relance avec ; contrôle `node:vm` en CI ; `broker_diagnose` signale un broker qui l'autorise |
+| génération de code dans l'hôte | `--disallow-code-generation-from-strings` par défaut : `serve` se relance avec et l'annonce ; vérifié en CI sur le binaire |
 | validation des arguments | validateur précompilé maison ; Ajv au design time seulement |
 | expressions régulières | `re2js` seul, jamais le moteur de V8 ni le module natif `re2` ; un motif que RE2 refuse est une erreur de compilation |
-| certification | signature Ed25519 détachée, comme les `.mcpb`, sur le manifeste canonique |
-| clés qui font foi | la clé du broker pour tous les slots, et les clés déclarées par slot dans le fichier de sécurité (`slotSigners`) pour leur slot seulement |
-| code généré | seulement dans un bundle `.mcpb`, hors du broker, lot ultérieur |
+| certification | signature Ed25519 détachée sur le manifeste canonique |
+| clés qui font foi | les `trustedKeys` de la config de l'hôte |
+| secrets des API cibles | lus par l'hôte, dans son environnement (mcp-vault ensuite), jamais dans le manifeste |
+| cibles autorisées | les `allowedTargets` de la config de l'hôte |
+| code généré | seulement dans un bundle `.mcpb`, processus séparé, lot ultérieur |
 
 ## Questions ouvertes
 
-- **Rotation de la clé du broker** : que deviennent les manifestes signés par l'ancienne clé ? Proposition : la clé précédente reste valide pour vérifier, jamais pour signer, jusqu'à ce que chaque manifeste ait été re-signé.
+- **Signature depuis la page Tier 4** : avec la clé de l'opérateur, ou avec une clé du designer qui atteste l'approbation de l'opérateur ?
+- **Secrets dans mcp-vault** : l'hôte lirait les jetons des API dans le slot `vault` du broker, scellés pour sa clé et autorisés par la politique (audience par API), au lieu de variables d'environnement.
+- **Rechargement** : l'hôte charge ses manifestes au démarrage ; faut-il surveiller le dossier, ou un signal, pour publier un nouveau manifeste sans redémarrer ?

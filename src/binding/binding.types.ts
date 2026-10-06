@@ -24,14 +24,14 @@ export type PickPath = string;
 export type IBindingSource = { readonly path: string; readonly url?: never; readonly sha256: string } | { readonly url: string; readonly path?: never; readonly sha256: string };
 
 export interface IBindingAuth {
-    /** An `upstreamSecrets` entry of the broker's security file. Never the secret itself. */
+    /** The name of a secret, resolved by the mcp-open-api host from its own configuration. Never the secret itself. */
     readonly secretRef: string;
     /** The spec's `securityScheme` to apply, when it declares several. */
     readonly scheme?: string;
 }
 
 export interface IBindingTarget {
-    /** Origin and prefix of the API. Must be listed in the broker's `slotDefinitions.allowedTargets`. */
+    /** Origin and prefix of the API. Its origin must be listed in the host's `allowedTargets`. */
     readonly baseUrl: string;
     readonly auth?: IBindingAuth;
     /** Fixed, non-secret headers. `Authorization`, `Cookie` and `Proxy-Authorization` are refused. */

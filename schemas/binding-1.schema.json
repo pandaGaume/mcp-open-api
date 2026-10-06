@@ -61,13 +61,13 @@
       "additionalProperties": false,
       "required": ["baseUrl"],
       "properties": {
-        "baseUrl": { "type": "string", "pattern": "^https?://[^\\s]+$", "description": "Must be listed in the broker's slotDefinitions.allowedTargets." },
+        "baseUrl": { "type": "string", "pattern": "^https?://[^\\s]+$", "description": "Its origin must be listed in the allowedTargets of the mcp-open-api host serving the slot." },
         "auth": {
           "type": "object",
           "additionalProperties": false,
           "required": ["secretRef"],
           "properties": {
-            "secretRef": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$", "description": "An upstreamSecrets entry of the broker's security file." },
+            "secretRef": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$", "description": "The name of a secret, resolved by the mcp-open-api host from its own configuration (secrets)." },
             "scheme": { "type": "string", "minLength": 1, "description": "The spec's securityScheme to apply, when it declares several." }
           }
         },

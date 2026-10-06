@@ -26,88 +26,33 @@ export interface ILoopbackHost {
     ): ILoopbackProviderHandle;
 }
 
+/**
+ * A provider transport of `@cyanmycelium/mcp-broker-provider`
+ * (`MultiplexTransport`, `DirectTransport`): the MCP traffic of one slot,
+ * plus `broker`, the broker's own methods for that slot.
+ */
+export interface IProviderTransport extends IMessageTransport {
+    readonly broker: {
+        declare(declaration: never): Promise<unknown>;
+        authorize: IBrokerAuthority["authorize"];
+        reportResult: IBrokerAuthority["reportResult"];
+    };
+}
+
 export interface IServeManifestOptions extends Omit<IEngineOptions, "guard"> {
-    /** The provider identity the slot publishes and declares under. Required when the manifest has a declaration. */
+    /** Loopback only: the provider identity the slot publishes and declares under. */
     readonly principal?: { readonly id: string; readonly allowedResources?: readonly string[] };
+    /** Provider transport only: how long to wait for the socket before declaring. Default 10 s. */
+    readonly openTimeoutMs?: number;
 }
 
 export interface IServedManifest {
     readonly engine: ManifestEngine;
-    readonly handle: ILoopbackProviderHandle;
+    /** Loopback only. */
+    readonly handle?: ILoopbackProviderHandle;
     /** The broker's answer to the declaration, `undefined` when the manifest has none. */
     readonly declaration?: BrokerMethodOutcome;
     stop(): Promise<void>;
-}
-
-/** The broker as the authority a {@link BrokerAccessGuard} asks: loopback outcomes unwrapped, errors thrown. */
-function authorityOf(handle: () => ILoopbackProviderHandle): IBrokerAuthority {
-    return {
-        async authorize(query) {
-            const outcome = await handle().authorize(query);
-            if ("error" in outcome) throw new Error(outcome.error.message);
-            return outcome.result as Awaited<ReturnType<IBrokerAuthority["authorize"]>>;
-        },
-        reportResult(report) {
-            handle().reportResult(report);
-        },
-    };
-}
-
-/**
- * Serves a manifest in the broker's own process: no socket, no framing. The
- * slot is registered as a loopback provider, then its authorization is
- * declared. Engineering limits returned by the broker are applied by the engine
- * (`constraints: "return"`).
- *
- * The manifest must have been verified (signature, hash) before it gets here.
- */
-export async function serveManifest(host: ILoopbackHost, manifest: IManifest, options: IServeManifestOptions = {}): Promise<IServedManifest> {
-    let handle: ILoopbackProviderHandle | undefined;
-    const guard = new BrokerAccessGuard(
-        authorityOf(() => handle!),
-        { constraints: "return" }
-    );
-    const engine = new ManifestEngine(manifest, { ...options, guard });
-
-    const [serverEnd, clientEnd] = LoopbackTransport.createPair();
-    const server = new McpServerBuilder().withName(manifest.slot).withTransport(serverEnd).register(new ManifestBehavior(engine)).build();
-    await server.start();
-    handle = host.registerLoopbackProvider(manifest.slot, clientEnd, options.principal ? { principal: options.principal } : {});
-
-    const stop = async (): Promise<void> => {
-        await server.stop();
-        engine.close();
-    };
-
-    let declaration: BrokerMethodOutcome | undefined;
-    if (manifest.declaration) {
-        const d = manifest.declaration;
-        const namespace = d.namespace.replace(/\/$/, "");
-        declaration = await handle.declare({
-            version: `${manifest.provenance.binding}`,
-            domain: d.domain,
-            namespace: { resource: d.namespace },
-            capabilities: d.capabilities,
-            ...(d.resources?.length
-                ? {
-                      resources: d.resources.map((r) =>
-                          "resourcePattern" in r
-                              ? { resourcePattern: `${namespace}/${r.resourcePattern}`, ...(r.where ? { where: r.where } : {}), limits: r.limits }
-                              : { resource: r.resource, resourcePath: `${namespace}/${r.resourcePath}`, ...(r.limits ? { limits: r.limits } : {}) }
-                      ),
-                  }
-                : {}),
-            ...(d.resultsRequired?.length ? { resultsRequired: d.resultsRequired } : {}),
-        });
-        // A slot whose declaration was refused would answer every call with a
-        // denial: it is not served at all, and the reasons are thrown.
-        if ("error" in declaration) {
-            await stop();
-            throw new ManifestDeclarationError(manifest.slot, declaration.error);
-        }
-    }
-
-    return { engine, handle, ...(declaration ? { declaration } : {}), stop };
 }
 
 /** The broker refused the slot's declaration; the slot is not served. */
@@ -117,7 +62,7 @@ export class ManifestDeclarationError extends Error {
 
     constructor(
         readonly slot: string,
-        readonly brokerError: { readonly code: number; readonly message: string; readonly data?: unknown }
+        readonly brokerError: { readonly code?: number; readonly message: string; readonly data?: unknown }
     ) {
         const errors = (brokerError.data as { errors?: unknown } | undefined)?.errors;
         const reasons = Array.isArray(errors) ? errors.map(String) : [brokerError.message];
@@ -125,4 +70,117 @@ export class ManifestDeclarationError extends Error {
         this.name = "ManifestDeclarationError";
         this.reasons = reasons;
     }
+}
+
+/** The `broker/authorization/declare` parameters of a manifest, paths made absolute. */
+export function declarationOf(manifest: IManifest): Record<string, unknown> | undefined {
+    const d = manifest.declaration;
+    if (!d) return undefined;
+    const namespace = d.namespace.replace(/\/$/, "");
+    return {
+        version: manifest.provenance.binding,
+        domain: d.domain,
+        namespace: { resource: d.namespace },
+        capabilities: d.capabilities,
+        ...(d.resources?.length
+            ? {
+                  resources: d.resources.map((r) =>
+                      "resourcePattern" in r
+                          ? { resourcePattern: `${namespace}/${r.resourcePattern}`, ...(r.where ? { where: r.where } : {}), limits: r.limits }
+                          : { resource: r.resource, resourcePath: `${namespace}/${r.resourcePath}`, ...(r.limits ? { limits: r.limits } : {}) }
+                  ),
+              }
+            : {}),
+        ...(d.resultsRequired?.length ? { resultsRequired: d.resultsRequired } : {}),
+    };
+}
+
+/**
+ * Serves a manifest in the broker's own process: no socket, no framing. For
+ * an application that embeds the broker; a standalone host uses
+ * {@link serveManifestOver} instead, and keeps large responses out of the
+ * broker's event loop.
+ *
+ * The manifest must have been verified (signature, hash) before it gets here.
+ */
+export async function serveManifest(host: ILoopbackHost, manifest: IManifest, options: IServeManifestOptions = {}): Promise<IServedManifest> {
+    let handle: ILoopbackProviderHandle | undefined;
+    const authority: IBrokerAuthority = {
+        async authorize(query) {
+            const outcome = await handle!.authorize(query);
+            if ("error" in outcome) throw new Error(outcome.error.message);
+            return outcome.result as Awaited<ReturnType<IBrokerAuthority["authorize"]>>;
+        },
+        reportResult: (report) => handle!.reportResult(report),
+    };
+    const engine = new ManifestEngine(manifest, { ...options, guard: new BrokerAccessGuard(authority, { constraints: "return" }) });
+
+    const [serverEnd, clientEnd] = LoopbackTransport.createPair();
+    const server = new McpServerBuilder().withName(manifest.slot).withTransport(serverEnd).register(new ManifestBehavior(engine)).build();
+    await server.start();
+    handle = host.registerLoopbackProvider(manifest.slot, clientEnd, options.principal ? { principal: options.principal } : {});
+    const stop = async (): Promise<void> => {
+        await server.stop();
+        engine.close();
+    };
+
+    const params = declarationOf(manifest);
+    if (!params) return { engine, handle, stop };
+    const declaration = await handle.declare(params);
+    if ("error" in declaration) {
+        await stop();
+        throw new ManifestDeclarationError(manifest.slot, declaration.error);
+    }
+    return { engine, handle, declaration, stop };
+}
+
+/**
+ * Serves a manifest over a provider transport: the slot is published from
+ * this process (an mcp-open-api host), not from the broker's. The transport's
+ * identity is the provider's: its secret, its `allowedResources`.
+ */
+export async function serveManifestOver(transport: IProviderTransport, manifest: IManifest, options: IServeManifestOptions = {}): Promise<IServedManifest> {
+    const engine = new ManifestEngine(manifest, { ...options, guard: new BrokerAccessGuard(transport.broker, { constraints: "return" }) });
+    const server = new McpServerBuilder().withName(manifest.slot).withTransport(transport).register(new ManifestBehavior(engine)).build();
+    // The message handler is installed before the socket opens: the broker may
+    // replay `initialize` the moment it does.
+    await server.start();
+    const stop = async (): Promise<void> => {
+        await server.stop();
+        engine.close();
+    };
+    try {
+        await opened(transport, options.openTimeoutMs ?? 10_000);
+    } catch (error) {
+        await stop();
+        throw error;
+    }
+
+    const params = declarationOf(manifest);
+    if (!params) return { engine, stop };
+    try {
+        const result = await transport.broker.declare(params as never);
+        return { engine, declaration: { result }, stop };
+    } catch (error) {
+        await stop();
+        const e = error as { message?: string; code?: number; data?: unknown };
+        throw new ManifestDeclarationError(manifest.slot, { message: e.message ?? String(error), ...(e.code !== undefined ? { code: e.code } : {}), data: e.data });
+    }
+}
+
+/** `start()` resolving is not a connection guarantee: wait for the transport to report itself open. */
+function opened(transport: IMessageTransport, timeoutMs: number): Promise<void> {
+    if (transport.isOpen) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const started = Date.now();
+        const timer = setInterval(() => {
+            if (transport.isOpen) {
+                clearInterval(timer);
+                resolve();
+            } else if (Date.now() - started > timeoutMs) {
+                clearInterval(timer);
+                reject(new Error(`the provider socket did not open within ${timeoutMs} ms`));
+            }
+        }, 10);
+    });
 }

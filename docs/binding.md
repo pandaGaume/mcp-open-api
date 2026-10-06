@@ -20,7 +20,7 @@ Statut : version 1 du format. Le schéma (`schemas/binding-1.schema.json`), les 
 5. **Rien de masqué sans valeur.** Un argument requis par la spec et masqué (`hide`) doit recevoir une valeur `fixed`, ou avoir un `default` dans la spec.
 6. **Sortie explicite.** Chaque outil déclare sa sortie : une sélection de champs (`pick`), ou `"all"` écrit en toutes lettres. Les réponses sont le premier coût côté agent et le premier risque de fuite.
 7. **Aucun code.** Des emplacements, des valeurs fixes, des restrictions, des sélections de champs. Les seules expressions admises sont celles d'Arazzo, et seulement dans les workflows.
-8. **Aucun secret.** `secretRef` désigne une entrée `upstreamSecrets` du fichier de sécurité du broker, rien d'autre.
+8. **Aucun secret.** `secretRef` est un nom ; l'hôte mcp-open-api qui sert le slot le résout dans sa propre config (`secrets`), jamais dans le binding ni le manifeste.
 9. **Compilation déterministe.** La même spec, le même binding et la même version du compilateur donnent le même manifeste, octet pour octet.
 10. **Champs inconnus refusés.** Une faute de frappe (`"hidde": true`) est une erreur, pas un réglage ignoré.
 
@@ -62,8 +62,8 @@ Un binding couvre **une** spec et **un** slot.
 
 | champ | requis | défaut | rôle |
 | --- | --- | --- | --- |
-| `baseUrl` | oui | | origine et préfixe de l'API ; doit figurer dans `slotDefinitions.allowedTargets` du broker. Le `servers[]` de la spec n'est jamais utilisé tel quel |
-| `auth.secretRef` | non | | entrée `upstreamSecrets` du fichier de sécurité |
+| `baseUrl` | oui | | origine et préfixe de l'API ; son origine doit figurer dans les `allowedTargets` de l'hôte qui sert le slot. Le `servers[]` de la spec n'est jamais utilisé tel quel |
+| `auth.secretRef` | non | | nom du secret, résolu par l'hôte dans sa config (`secrets`) |
 | `auth.scheme` | non | le seul `securityScheme` de la spec | nom du `securityScheme` à appliquer quand la spec en déclare plusieurs |
 | `headers` | non | | en-têtes fixes et non secrets (`"Accept-Language": "fr"`) |
 | `timeoutMs` | non | 10000 | délai par appel HTTP |

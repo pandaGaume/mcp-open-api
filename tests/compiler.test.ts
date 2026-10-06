@@ -1,50 +1,12 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startTestBroker, type ITestBroker } from "@cyanmycelium/mcp-broker/testing";
 import { serveManifest, type IBinding, type IManifest, type IServedManifest } from "@cyanmycelium/mcp-open-api";
 import { compile, sha256 } from "@cyanmycelium/mcp-open-api/compiler";
 import { ValveApi } from "./fixtures/valve.api";
 import { McpHttpClient, errorOf } from "./fixtures/mcp.client";
+import { fixture, valveBinding, valveSpec } from "./fixtures/valve.binding";
 
-const fixture = (name: string): string => readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), "utf8");
-const valveSpec = fixture("valve.openapi.json");
 const petstoreSpec = fixture("petstore.yaml");
-
-/** The vannes binding, against the OpenAPI description of the fake valve API. */
-function valveBinding(baseUrl: string, spec = valveSpec): IBinding {
-    return {
-        binding: 1,
-        slot: "vannes",
-        title: "Vannes du réseau Nord",
-        spec: { path: "valve.openapi.json", sha256: sha256(spec) },
-        target: { baseUrl, auth: { secretRef: "otGateway" } },
-        governance: { domain: "valves", namespace: "/site/nord" },
-        tools: {
-            getValve: {
-                name: "lire_vanne",
-                description: "Lit la position (0-100 %) et l'état d'une vanne du réseau Nord.",
-                args: { "path.id": { name: "vanne", pattern: "^V-\\d{3}$" }, "query.debug": { hide: true } },
-                output: { pick: ["id", "position", "state", "updatedAt"] },
-                authorization: { capability: "valves.read", resourcePath: "valves/{path.id}" },
-            },
-            listValves: {
-                name: "lister_vannes",
-                description: "Liste les vannes du réseau Nord et leur état.",
-                output: { pick: ["items[].id", "items[].state"], maxItems: 50 },
-                authorization: { capability: "valves.read", resourcePath: "valves" },
-            },
-            setValvePosition: {
-                name: "ouvrir_vanne",
-                description: "Fixe l'ouverture d'une vanne du réseau Nord, en pourcentage.",
-                args: { "path.id": { name: "vanne", pattern: "^V-\\d{3}$" }, "body.position": { name: "pourcent", minimum: 0, maximum: 100 }, "body.mode": { fixed: "manual" } },
-                output: { pick: ["id", "position"] },
-                annotations: { idempotentHint: true, destructiveHint: false },
-                authorization: { capability: "valves.write", resourcePath: "valves/{path.id}", value: "body.position", resultRequired: true },
-            },
-        },
-    };
-}
 
 const codes = (result: ReturnType<typeof compile>): string[] => result.diagnostics.filter((d) => d.severity === "error").map((d) => d.code);
 const tool = (manifest: IManifest, name: string) => manifest.tools.find((t) => t.name === name)!;

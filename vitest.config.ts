@@ -8,6 +8,7 @@ export default defineConfig({
     resolve: {
         alias: [
             { find: "@cyanmycelium/mcp-open-api/compiler", replacement: source("compiler/index.ts") },
+            { find: "@cyanmycelium/mcp-open-api/host", replacement: source("host/index.ts") },
             { find: /^@cyanmycelium\/mcp-open-api$/, replacement: source("index.ts") },
         ],
     },
