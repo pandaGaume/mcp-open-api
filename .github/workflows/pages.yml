@@ -1,0 +1,55 @@
+name: pages
+
+# Publishes the manifest design page (dist/ui/) on GitHub Pages.
+on:
+    push:
+        branches: [main]
+        paths:
+            - "ui/**"
+            - "src/**"
+            - "package.json"
+            - "package-lock.json"
+            - "tsup.config.ts"
+            - ".github/workflows/pages.yml"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    pages: read
+
+concurrency:
+    group: pages
+    cancel-in-progress: false
+
+env:
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22.x
+                  cache: "npm"
+            - run: npm ci
+            - run: npm run build
+            - uses: actions/configure-pages@v5
+            - uses: actions/upload-pages-artifact@v4
+              with:
+                  path: dist/ui
+
+    deploy:
+        needs: build
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        permissions:
+            pages: write
+            id-token: write
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        steps:
+            - uses: actions/deploy-pages@v4
+              id: deployment

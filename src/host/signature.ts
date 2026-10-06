@@ -1,5 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify, type KeyObject } from "node:crypto";
 import { canonicalJson } from "../compiler/canonical";
+import type { IManifest } from "../manifest/manifest.types";
 
 /**
  * A detached manifest signature, stored next to the manifest as
@@ -45,6 +46,28 @@ export function signatureProblem(manifest: unknown, signature: unknown, trustedK
     if (digest !== signature.manifest) return `the manifest is ${digest}, the signature is for ${signature.manifest}: it changed after signing`;
     const bytes = Buffer.from(signature.signature, "base64");
     return trustedKeys.some((key) => verify(null, canonical, key, bytes)) ? null : "no trusted key verifies the signature";
+}
+
+/** A manifest that is not signed by a trusted key, with why. */
+export class ManifestSignatureError extends Error {
+    constructor(readonly reason: string) {
+        super(`the manifest is not accepted: ${reason}`);
+        this.name = "ManifestSignatureError";
+    }
+}
+
+/**
+ * Reads a manifest and checks its signature against trusted Ed25519 keys:
+ * what a host does before serving one. Texts or parsed values are accepted,
+ * as read from `<slot>.json` and `<slot>.json.sig`. Throws
+ * {@link ManifestSignatureError} with the reason.
+ */
+export function verifyManifest(manifest: unknown, signature: unknown, trustedKeyPems: readonly string[]): IManifest {
+    const parsed = (typeof manifest === "string" ? JSON.parse(manifest) : manifest) as IManifest;
+    const sig = typeof signature === "string" ? JSON.parse(signature) : signature;
+    const problem = signatureProblem(parsed, sig, trustedKeysFrom(trustedKeyPems));
+    if (problem) throw new ManifestSignatureError(problem);
+    return parsed;
 }
 
 /** Reads PEM public keys, refusing anything but Ed25519. */

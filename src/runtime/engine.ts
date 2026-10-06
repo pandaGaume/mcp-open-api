@@ -12,8 +12,8 @@ export type SecretResolver = (secretRef: string) => string | undefined;
 export interface IEngineOptions {
     /** Where tools with an `authorization` ask. Required as soon as one tool has one. */
     readonly guard?: IAccessGuard;
-    /** Required when the manifest's target has `auth`. */
-    readonly secrets?: SecretResolver;
+    /** Required when the manifest's target has `auth`: `{ otGateway: process.env.OT_TOKEN }`, or a function. */
+    readonly secrets?: SecretResolver | Readonly<Record<string, string | undefined>>;
     /** Origins (`https://host:port`) the manifest may call. When given, any other `baseUrl` refuses the load. */
     readonly allowedTargets?: readonly string[];
     /**
@@ -115,7 +115,9 @@ export class ManifestEngine {
             problems.push(`target.baseUrl is not a URL: ${manifest.target.baseUrl}`);
         }
         this._base = base ?? new URL("http://invalid.invalid");
-        const auth = this._resolveAuth(manifest.target.auth, options.secrets, problems);
+        const given = options.secrets;
+        const secrets: SecretResolver | undefined = typeof given === "function" ? given : given ? (ref) => (Object.hasOwn(given, ref) ? given[ref] : undefined) : undefined;
+        const auth = this._resolveAuth(manifest.target.auth, secrets, problems);
         this._fixedHeaders = { accept: "application/json", ...lowerKeys(manifest.target.headers ?? {}), ...auth.headers };
         this._authQuery = auth.query;
 

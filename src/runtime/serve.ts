@@ -74,6 +74,16 @@ export class ManifestDeclarationError extends Error {
     }
 }
 
+/**
+ * The `broker/authorization/declare` parameters of a manifest, paths made
+ * absolute: what a host sends with `transport.broker.declare(...)`, like
+ * mcp-cache's `buildCacheDeclaration`. `undefined` when the manifest declares
+ * nothing.
+ */
+export function buildManifestDeclaration(manifest: IManifest): Record<string, unknown> | undefined {
+    return declarationOf(manifest);
+}
+
 /** The `broker/authorization/declare` parameters of a manifest, paths made absolute. */
 export function declarationOf(manifest: IManifest): Record<string, unknown> | undefined {
     const d = manifest.declaration;
