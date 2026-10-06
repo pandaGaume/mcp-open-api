@@ -75,11 +75,11 @@ Le manifeste parle en noms MCP, après renommage : c'est un plan d'exécution, p
     "instructions": "Lecture et commande des vannes du réseau Nord. Toute ouverture est bornée à 0-100 %.",
     "target": { "baseUrl": "https://ot-gw.local/api/v2", "auth": { "secretRef": "otGateway", "kind": "bearer" }, "timeoutMs": 10000, "maxResponseBytes": 1048576 },
     "declaration": {
-        "domain": "scada",
-        "namespace": "nord",
-        "capabilities": ["scada.valve.read", "scada.valve.write"],
-        "resources": [{ "path": "valves/{id}", "limits": { "minValue": 0, "maxValue": 100 } }],
-        "resultsRequired": ["scada.valve.write"]
+        "domain": "valves",
+        "namespace": "/site/nord",
+        "capabilities": ["valves.read", "valves.write"],
+        "resources": [{ "resource": "valves:/site/nord/valves/V-012", "resourcePath": "valves/V-012", "limits": { "minValue": 0, "maxValue": 40 } }],
+        "resultsRequired": ["valves.write"]
     },
     "tools": [
         {
@@ -99,10 +99,13 @@ Le manifeste parle en noms MCP, après renommage : c'est un plan d'exécution, p
             "http": {
                 "method": "PUT",
                 "path": ["/valves/", { "arg": "vanne" }, "/position"],
-                "body": { "position": { "arg": "pourcent" }, "mode": "manual" }
+                "body": [
+                    { "pointer": "/position", "arg": "pourcent" },
+                    { "pointer": "/mode", "value": "manual" }
+                ]
             },
             "output": { "pick": ["id", "position"] },
-            "authorization": { "capability": "scada.valve.write", "resourcePath": ["valves/", { "arg": "vanne" }], "value": "pourcent", "resultRequired": true }
+            "authorization": { "capability": "valves.write", "resourcePath": ["valves/", { "arg": "vanne" }], "value": "pourcent", "resultRequired": true }
         }
     ]
 }
@@ -114,13 +117,34 @@ Le manifeste parle en noms MCP, après renommage : c'est un plan d'exécution, p
 | `compiler` | paquet et version du compilateur : avec `provenance`, ce qu'il faut pour recompiler |
 | `provenance` | `sha256` du binding et de la spec compilés |
 | `target` | comme dans le binding, avec le type d'authentification résolu depuis la spec |
-| `declaration` | ce que le runtime déclare au broker (`broker/authorization/declare`) |
+| `declaration` | ce que le runtime déclare au broker (`broker/authorization/declare`) ; `namespace` est un chemin de ressource absolu, les `resources` sont des ressources concrètes ou des motifs (voir plus bas) |
 | `tools[].inputSchema` | schéma composé spec et binding, en noms MCP ; seuls les mots-clés que le validateur du runtime connaît y figurent |
-| `tools[].http` | le plan : un gabarit est une liste de morceaux fixes et de `{ "arg": nom }` ; le corps est un arbre de valeurs fixes et de `{ "arg": nom }` |
+| `tools[].http.path` | une liste de morceaux fixes et de `{ "arg": nom }` ; les valeurs d'arguments sont encodées (`encodeURIComponent`), un argument ne peut donc ni ajouter un segment ni changer d'origine |
+| `tools[].http.query`, `headers` | des listes `{ name, arg }` ou `{ name, value }` ; un argument absent est omis, un tableau répète le paramètre |
+| `tools[].http.body` | une liste d'affectations `{ pointer, arg }` ou `{ pointer, value }`, par pointeur JSON (RFC 6901) ; `""` désigne le corps entier. Une liste plate plutôt qu'un arbre : aucune ambiguïté entre une valeur fixe et une référence d'argument, et chaque ligne se relit seule |
 | `tools[].output` | la projection, appliquée avant de répondre |
-| `tools[].authorization` | ce que le runtime demande à `broker/authorize` à chaque appel |
+| `tools[].authorization` | ce que le runtime demande à `broker/authorize` à chaque appel ; l'identifiant natif envoyé est le nom qualifié `<domaine>:<chemin de ressource>` : une ressource appartient à son domaine, pas au slot, et `valves:/site/nord/**` n'est pas `scada:/site/nord/**` |
 
-Ce format remplace celui de la « définition de slot » du document de conception.
+Ce format remplace celui de la « définition de slot » du document de conception. Il est implémenté dans `src/manifest/manifest.types.ts`, et le moteur qui l'exécute dans `src/runtime/`.
+
+### Limites d'ingénierie : concrètes et par motif (broker 1.7.0)
+
+Le broker 1.6 ne retrouvait les limites que par l'identifiant natif **exact** d'une ressource : une limite se déclarait pour `V-012`, jamais pour `valves/{id}`. Le banc du moteur l'a montré. Le broker 1.7.0 accepte aussi des motifs dans une déclaration, et des limites posées par l'exploitant dans le fichier de sécurité ; il intersecte toutes celles qui s'appliquent. Le manifeste déclare donc les deux formes :
+
+```json
+"resources": [
+    { "resource": "valves:/site/nord/valves/V-012", "resourcePath": "valves/V-012", "limits": { "maxValue": 40 } },
+    { "resourcePattern": "valves/{id}", "where": { "id": "V-1\d{2}" }, "limits": { "maxValue": 60 } }
+]
+```
+
+Les chemins sont relatifs au namespace ; le moteur les rend absolus au moment de déclarer. Le compilateur dérivera le motif du gabarit de `resourcePath` et ses limites du schéma de l'argument `value`.
+
+### Une déclaration par slot, un domaine par slot (broker 1.7.0)
+
+Une ressource gouvernée est un nom qualifié `<domaine>:<chemin>`, et un domaine n'a qu'un propriétaire. Chaque slot déclare donc **son** domaine, jamais celui d'un autre provider. Le broker 1.7.0 indexe les déclarations par (identité, slot) : un même hôte peut servir plusieurs slots, chacun avec son domaine, sans qu'une déclaration écrase l'autre. Si le broker refuse une déclaration, `serveManifest` arrête le slot et lève `ManifestDeclarationError` avec toutes les raisons : un slot dont chaque appel serait refusé n'est pas servi.
+
+Le moteur applique les contraintes que le broker renvoie (`allow-with-constraints`) à l'argument désigné par `authorization.value`. Une limite borne une valeur **écrite** : un outil `GET` ou `HEAD` sans `value` n'en écrit aucune, il passe. Un outil qui écrit sans désigner sa valeur est refusé : il ne doit jamais contourner une limite. C'est la méthode HTTP qui décide, pas l'annotation `readOnlyHint`, que MCP présente comme une simple indication.
 
 ## Où tourne le compilateur
 
@@ -261,6 +285,30 @@ Pour le runtime :
 - le moteur de V8 n'est jamais utilisé pour un `pattern` venu d'un manifeste ;
 - RE2 ne connaît ni les références arrière (`\1`) ni les assertions avant ou arrière (`(?=`, `(?<=`) : un motif que RE2 ne compile pas est une **erreur de compilation** du binding, ce qui écarte d'office la plupart des motifs dangereux ;
 - la longueur de l'argument reste vérifiée **avant** son `pattern`, et le compilateur exige un `maxLength` sur tout argument qui porte un `pattern` : RE2 est linéaire, pas gratuit.
+
+### Le moteur réel, mesuré
+
+Le moteur de `src/runtime/` a été mesuré le 2026-10-05 avec [bench/run.mjs](../bench/run.mjs), dans un broker 1.6.1 lancé avec `--disallow-code-generation-from-strings` (confirmé : `new Function` y lève `EvalError`). Le prototype du banc de plomberie tourne dans le même passage, pour comparer.
+
+| scénario | p50 | p99 | débit |
+| --- | --- | --- | --- |
+| HTTP direct, 1 Ko | 0,32 ms | 0,80 ms | 2 879 req/s |
+| broker + prototype, 1 Ko | 0,74 ms | 1,46 ms | 1 303 req/s |
+| broker + **moteur**, 1 Ko | 0,81 ms | 2,71 ms | 1 087 req/s |
+| broker + **moteur** + `authorize`, 1 Ko | 0,80 ms | 1,58 ms | 1 213 req/s |
+| broker + **moteur**, 64 Ko | 1,21 ms | 2,11 ms | 805 req/s |
+| HTTP direct, 1 Ko, 100 concurrents | 12,8 ms | 38,5 ms | 6 910 req/s |
+| broker + prototype, 100 concurrents | 27,5 ms | 55,4 ms | 3 458 req/s |
+| broker + **moteur**, 100 concurrents | 29,3 ms | 46,9 ms | 3 340 req/s |
+| broker + **moteur** + `authorize`, 100 concurrents | 39,3 ms | 60,7 ms | 2 449 req/s |
+| slot voisin pendant 4 réponses de 5 Mo | 45,6 ms | 104 ms | |
+
+- Le moteur coûte à peine plus que le prototype : 0,07 ms en p50, 3 % de débit à saturation. Les couches mcp-core et RE2 sont donc négligeables.
+- Le surcoût par rapport à l'HTTP direct est d'environ 0,5 ms en p50 ce jour-là, sur une machine plus chargée que lors du premier banc (le débit direct y est 30 % plus bas) : seules les comparaisons d'un même passage valent.
+- `authorize` coûte 27 % du débit à saturation, contre 17 % au premier banc. La ligne d'audit écrite à chaque décision y pèse : un puits d'audit asynchrone reste à mesurer côté broker.
+- Les grosses réponses restent le vrai risque : avec des réponses de 5 Mo admises (le banc monte `maxResponseBytes` à 8 Mo), un slot voisin passe à 46 ms en p50 et 104 ms en p99. D'où la limite à 1 Mo par défaut.
+
+Le validateur réel (`bench/validate.mjs`) coûte 442 ns sur `ouvrir_vanne` et 10 µs sur le gros outil, contre 145 ns et 3,4 µs pour le prototype : c'est le prix de RE2 sur les `pattern`, que le prototype évaluait avec V8. Il se charge en 87 µs pour le gros schéma, à cause de la compilation des motifs RE2. Comparé à Ajv sur 100 000 schémas et 1 000 000 de valeurs (`bench/validator.fuzz.mjs`), il ne donne aucun désaccord.
 
 ### Le chargement, dans l'ordre
 

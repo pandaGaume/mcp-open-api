@@ -1,4 +1,4 @@
-// A real broker (test kit) with prototype runtimes registered as loopback
+// A real broker (test kit) with the real engine and, for comparison, the prototype runtimes registered as loopback
 // providers, the way a published slot definition would run. Each runtime does
 // what the declarative runtime will do per tools/call: check the arguments,
 // fill a precompiled path template, call the REST API, read the body under a
@@ -8,6 +8,8 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { LoopbackTransport } from "@cyanmycelium/mcp-core";
 import { startTestBroker } from "@cyanmycelium/mcp-broker/testing";
 import { callerReferenceOf } from "@cyanmycelium/mcp-broker-provider";
+// The real engine, from the build: run `npm run build` first.
+import { serveManifest } from "../dist/index.js";
 
 const targetPort = Number(process.argv[2]);
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -16,8 +18,8 @@ const broker = await startTestBroker({
     callers: { bench: {} },
     providers: { openapi: { allowedResources: ["/bench/**"] } },
     policy: {
-        slotResources: { echo: "/bench/echo", rest: "/bench/rest", restnoka: "/bench/restnoka", restgov: "/bench/restgov" },
-        roles: { caller: { capabilities: ["mcp.tools.call", "mcp.tools.list", "bench.valve.read"] } },
+        slotResources: { echo: "/bench/echo", rest: "/bench/rest", restnoka: "/bench/restnoka", restgov: "/bench/restgov", engine: "/bench/engine", enginegov: "/bench/enginegov" },
+        roles: { caller: { capabilities: ["mcp.tools.call", "mcp.tools.list", "bench.valve.read", "benchengine.valve.read"] } },
         assignments: [{ id: "bench", subject: "user:bench", role: "caller", resource: "/bench/**" }],
     },
 });
@@ -88,6 +90,42 @@ runtime("restnoka", { agent: false });
 const gov = runtime("restgov", { agent: keepAlive, govern: true });
 const declared = await gov.declare({ version: "1", domain: "bench", namespace: { resource: "/bench" }, capabilities: ["bench.valve.read"] });
 
+// The same tool, served by the real engine from a manifest: with and without the broker deciding.
+const manifest = (slot, govern) => ({
+    manifest: 1,
+    slot,
+    compiler: "bench",
+    provenance: { binding: "bench", spec: "bench" },
+    target: { baseUrl: `http://127.0.0.1:${targetPort}`, timeoutMs: 10000, maxResponseBytes: MAX_BYTES },
+    ...(govern ? { declaration: { domain: "benchengine", namespace: "/bench", capabilities: ["benchengine.valve.read"] } } : {}),
+    tools: [
+        {
+            name: "getValve",
+            inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id"],
+                properties: { id: { type: "string", maxLength: 8, pattern: "^V-\\d{1,6}$" }, size: { enum: [1024, 65536, 5242880] } },
+            },
+            http: { method: "GET", path: ["/valves/", { arg: "id" }], query: [{ name: "size", arg: "size" }] },
+            output: { pick: ["items[].id", "items[].position", "items[].state"], maxItems: 20 },
+            ...(govern ? { authorization: { capability: "benchengine.valve.read", resourcePath: ["valves/", { arg: "id" }] } } : {}),
+        },
+    ],
+});
+const principal = { id: "openapi-engine", allowedResources: ["/bench/**"] };
+await serveManifest(broker.tunnel, manifest("engine", false), { principal });
+const enginegov = await serveManifest(broker.tunnel, manifest("enginegov", true), { principal });
+if (enginegov.declaration && "error" in enginegov.declaration) throw new Error(`engine declaration refused: ${JSON.stringify(enginegov.declaration)}`);
+
+// Whether this process may turn text into code.
+let codeGeneration = "allowed";
+try {
+    new Function("return 1")();
+} catch (error) {
+    codeGeneration = `disallowed (${error.constructor.name})`;
+}
+
 const lag = monitorEventLoopDelay({ resolution: 1 });
 process.on("message", (m) => {
     if (m === "lag:reset") {
@@ -101,4 +139,4 @@ process.on("message", (m) => {
         void broker.stop().then(() => process.exit(0));
     }
 });
-process.send({ url: broker.url, declared });
+process.send({ url: broker.url, declared, codeGeneration });

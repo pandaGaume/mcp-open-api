@@ -51,7 +51,7 @@ Statut : proposition, version 1 du format. Rien n'est encore implémenté.
 | `instructions` | non | instructions du serveur MCP, renvoyées à l'`initialize` |
 | `spec` | oui | la spec source : `path` (relatif au binding) ou `url`, et son `sha256` |
 | `target` | oui | où et comment appeler l'API |
-| `governance` | si un outil a une `authorization` | `domain` et `namespace` déclarés au broker |
+| `governance` | si un outil a une `authorization` | `domain` et `namespace` déclarés au broker. Le domaine est **celui du slot** : les ressources qu'il gouverne sont des noms qualifiés `<domaine>:<chemin>`, et `valves:/site/nord/**` n'est pas `scada:/site/nord/**`. Un domaine n'a qu'un propriétaire : un slot ne déclare jamais le domaine d'un autre provider |
 | `tools` | non | les opérations exposées en outils, par clé d'opération |
 | `resources` | non | les opérations `GET` exposées en ressources, par clé d'opération |
 | `arazzo` | non | document Arazzo des workflows (réservé, voir plus bas) |
@@ -154,7 +154,7 @@ Une réponse 4xx ou 5xx donne `isError: true` avec le statut HTTP. Si le corps e
 | --- | --- |
 | `capability` | capacité vérifiée par `broker/authorize` ; doit être sous `<governance.domain>.*` |
 | `resourcePath` | chemin de ressource, relatif au `namespace` ; les gabarits utilisent l'adressage des `args` : `valves/{path.id}` |
-| `value` | l'argument qui porte la valeur écrite. Les limites déclarées au broker pour cette ressource sont **déduites de son schéma** : `minimum` et `maximum` donnent `minValue` et `maxValue`, `enum` donne `allowedValues`. Une décision `allow-with-constraints` s'applique à cet argument |
+| `value` | l'argument qui porte la valeur écrite. Une décision `allow-with-constraints` s'applique à cet argument. Les limites déclarées au broker pour le gabarit de `resourcePath` sont **déduites de son schéma** (`minimum` et `maximum` donnent `minValue` et `maxValue`, `enum` donne `allowedValues`) et déclarées par motif (broker 1.7.0 ou plus), voir compiler.md |
 | `resultRequired` | le résultat de l'appel doit être rapporté au broker (`broker/audit/result`) |
 
 Le compilateur produit la déclaration du slot à partir de toutes les entrées : une capacité par capacité distincte, une ressource par gabarit de `resourcePath`, avec ses limites.
@@ -342,7 +342,8 @@ Le manifeste contient tout ce qu'il faut pour exécuter sans la spec ni le bindi
 | format de la spec et de l'Overlay | JSON ou YAML : ce ne sont pas nos formats |
 | gabarits de `resourcePath` | adressage par emplacement (`{path.id}`), indépendant des renommages |
 | sortie par défaut | aucune : `output` est requis, `"all"` s'écrit explicitement |
-| limites de gouvernance | déduites du schéma de l'argument désigné par `authorization.value` |
+| limites de gouvernance | déduites du schéma de l'argument désigné par `authorization.value`, déclarées par motif (broker 1.7.0 ou plus) |
+| domaine | propre au slot, jamais celui d'un autre provider : une ressource gouvernée est un nom qualifié `<domaine>:<chemin>` |
 | plusieurs specs par binding | non : une spec, un binding, un slot |
 | Overlay | en entrée et en sortie, équivalence exacte avec `x-mcp-tool` et `x-mcp-resource` |
 | Arazzo | réservé dans le format dès la version 1, exécuté au lot « outils à plusieurs étapes » |

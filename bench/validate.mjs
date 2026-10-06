@@ -1,13 +1,14 @@
 // What argument validation costs per call, three ways:
 //   ajv       schema compiled into generated JavaScript (new Function)
 //   cfworker  @cfworker/json-schema, interpreted: walks the schema on every call
-//   closures  bench/closure.validator.mjs: schema walked once, at load, into closures
+//   closures  the engine's validator (src/runtime/validator.ts): schema walked once, at load, into closures
 //
 //   node bench/validate.mjs
 //   node --disallow-code-generation-from-strings bench/validate.mjs   (ajv is then skipped)
 import { cpus } from "node:os";
 import { Validator } from "@cfworker/json-schema";
-import { compileValidator } from "./closure.validator.mjs";
+// The real validator, from the build: run `npm run build` first.
+import { compileValidator } from "../dist/index.js";
 
 // The inputSchema the compiler emits for ouvrir_vanne: spec schema AND binding restriction.
 const small = {

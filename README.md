@@ -1,4 +1,4 @@
-[![npm](https://img.shields.io/npm/v/@cyanmycelium/mcp-open-api)](https://www.npmjs.com/package/@cyanmycelium/mcp-open-api) [![mcp-broker: 1.6.1](docs/assets/mcp-broker-badge.svg)](https://github.com/pandaGaume/mcp-broker)
+[![npm](https://img.shields.io/npm/v/@cyanmycelium/mcp-open-api)](https://www.npmjs.com/package/@cyanmycelium/mcp-open-api) [![mcp-broker: 1.7.0](docs/assets/mcp-broker-badge.svg)](https://github.com/pandaGaume/mcp-broker)
 [![CI](https://github.com/pandaGaume/mcp-open-api/actions/workflows/ci.yml/badge.svg)](https://github.com/pandaGaume/mcp-open-api/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -30,12 +30,15 @@ Converting OpenAPI to MCP is not new. A 300-operation spec does not make a good 
 
 ## Status
 
-Design stage. The package is scaffolded; no feature is implemented yet. The design covers the slot definition format, the declarative runtime and its governance in the broker, the broker's admin routes and pushed static pages, mcp-open-api itself, the temporary preview slot, and the future MCP path for agents.
+- **Implemented**: the binding format (`binding-1`, JSON Schema and types) and the **engine**: a manifest served as a broker slot, interpreted without generating code, with argument validation (RE2 patterns), the broker's decision and engineering limits on every call, connection pooling, response size cap and projection. Tested end to end behind a real broker, and benchmarked (`bench/`).
+- **Not yet**: the compiler (OpenAPI spec + binding to manifest), signed manifests, the Tier 4 validation page, the MCP path for agents.
+
+Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.md) (French).
 
 ## Requirements
 
 - Node.js 20.11 or later.
-- An mcp-broker, 1.6.1 or later. Publishing slots and pushed pages need broker features that are not released yet.
+- An mcp-broker, 1.7.0 or later: engineering limits by resource pattern, one declaration per slot. Publishing from the Tier 4 page needs broker features that are not released yet.
 
 ## Development
 

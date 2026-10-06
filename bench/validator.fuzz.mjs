@@ -1,10 +1,11 @@
-// Differential fuzzing of the precompiled validator against Ajv, the reference.
+// Differential fuzzing of the engine's validator (src/runtime/validator.ts) against Ajv, the reference.
 // Random schemas within the supported subset, random values, same verdict
 // expected from both. Any disagreement is printed with the schema and value.
 //
 //   node bench/validator.fuzz.mjs [cases=100000] [seed=1]
 import Ajv2020 from "ajv/dist/2020.js";
-import { compileValidator } from "./closure.validator.mjs";
+// The real validator, from the build: run `npm run build` first.
+import { compileValidator } from "../dist/index.js";
 
 const cases = Number(process.argv[2] ?? 100000);
 let seed = Number(process.argv[3] ?? 1);

@@ -16,7 +16,15 @@ const broker = fork(here("./broker.mjs"), [String(port)], { silent: true });
 let auditBytes = 0;
 broker.stdout.on("data", (b) => (auditBytes += b.length));
 broker.stderr.on("data", (b) => process.stderr.write(b));
-const { url, declared } = await once(broker, "url");
+// A broker that dies before it is ready would leave the bench waiting forever.
+const failEarly = (code) => {
+    console.error(`the bench broker exited (${code}) before it was ready; run bench/broker.mjs alone to see why`);
+    target.kill();
+    process.exit(1);
+};
+broker.once("exit", failEarly);
+const { url, declared, codeGeneration } = await once(broker, "url");
+broker.off("exit", failEarly);
 if (declared?.error) throw new Error(`declare refused: ${JSON.stringify(declared)}`);
 
 const auth = { authorization: "Bearer bench", "content-type": "application/json", accept: "application/json, text/event-stream" };
@@ -34,7 +42,7 @@ async function session(slot) {
 }
 
 const sessions = {};
-for (const slot of ["echo", "rest", "restnoka", "restgov"]) sessions[slot] = await session(slot);
+for (const slot of ["echo", "rest", "restnoka", "restgov", "engine", "enginegov"]) sessions[slot] = await session(slot);
 
 let seq = 1;
 async function callTool(slot, args) {
@@ -92,29 +100,32 @@ const add = (r) => {
     console.log(`${r.label.padEnd(44)} n=${String(r.n).padStart(5)} c=${String(r.concurrency).padStart(3)}  p50 ${r.p50.toFixed(3).padStart(8)} ms  p99 ${r.p99.toFixed(3).padStart(8)} ms  ${r.rps.toFixed(0).padStart(6)} req/s${lag}`);
 };
 
-console.log(`node ${process.version}, ${cpus()[0].model}, ${cpus().length} threads\n`);
+console.log(`node ${process.version}, ${cpus()[0].model}, ${cpus().length} threads; broker code generation: ${codeGeneration}\n`);
 
 // 1. Sequential latency, 1 KB response.
 add(await measure("direct HTTP, 1 KB", () => direct(1024), { n: 3000 }));
 add(await measure("broker, no HTTP (echo)", () => callTool("echo", { id: "V-12" }), { n: 3000 }));
-add(await measure("broker + runtime, 1 KB, keep-alive", () => callTool("rest", { id: "V-12" }), { n: 3000 }));
-add(await measure("broker + runtime, 1 KB, no keep-alive", () => callTool("restnoka", { id: "V-12" }), { n: 3000 }));
-add(await measure("broker + runtime + authorize, 1 KB", () => callTool("restgov", { id: "V-12" }), { n: 3000 }));
+add(await measure("broker + prototype, 1 KB, keep-alive", () => callTool("rest", { id: "V-12" }), { n: 3000 }));
+add(await measure("broker + prototype, 1 KB, no keep-alive", () => callTool("restnoka", { id: "V-12" }), { n: 3000 }));
+add(await measure("broker + prototype + authorize, 1 KB", () => callTool("restgov", { id: "V-12" }), { n: 3000 }));
+add(await measure("broker + ENGINE, 1 KB", () => callTool("engine", { id: "V-12" }), { n: 3000 }));
+add(await measure("broker + ENGINE + authorize, 1 KB", () => callTool("enginegov", { id: "V-12" }), { n: 3000 }));
 
 // 2. Response size.
 add(await measure("direct HTTP, 64 KB", () => direct(65536), { n: 1000 }));
-add(await lagWindow(() => measure("broker + runtime, 64 KB", () => callTool("rest", { id: "V-12", size: 65536 }), { n: 1000 })));
+add(await lagWindow(() => measure("broker + ENGINE, 64 KB", () => callTool("engine", { id: "V-12", size: 65536 }), { n: 1000 })));
 add(await measure("direct HTTP, 5 MB", () => direct(5 * 1024 * 1024), { n: 60, warmup: 5 }));
-add(await lagWindow(() => measure("broker + runtime, 5 MB", () => callTool("rest", { id: "V-12", size: 5 * 1024 * 1024 }), { n: 60, warmup: 5 })));
+add(await lagWindow(() => measure("broker + ENGINE, 5 MB", () => callTool("engine", { id: "V-12", size: 5 * 1024 * 1024 }), { n: 60, warmup: 5 })));
 
 // 3. Concurrency.
 add(await measure("direct HTTP, 1 KB", () => direct(1024), { n: 10000, concurrency: 100 }));
-add(await lagWindow(() => measure("broker + runtime, 1 KB", () => callTool("rest", { id: "V-12" }), { n: 10000, concurrency: 100 })));
-add(await measure("broker + runtime + authorize, 1 KB", () => callTool("restgov", { id: "V-12" }), { n: 10000, concurrency: 100 }));
+add(await lagWindow(() => measure("broker + prototype, 1 KB", () => callTool("rest", { id: "V-12" }), { n: 10000, concurrency: 100 })));
+add(await lagWindow(() => measure("broker + ENGINE, 1 KB", () => callTool("engine", { id: "V-12" }), { n: 10000, concurrency: 100 })));
+add(await measure("broker + ENGINE + authorize, 1 KB", () => callTool("enginegov", { id: "V-12" }), { n: 10000, concurrency: 100 }));
 
 // 4. Isolation: a small slot while another slot reads 5 MB bodies in a loop.
 let heavy = true;
-const background = Promise.all(Array.from({ length: 4 }, async () => { while (heavy) await callTool("rest", { id: "V-12", size: 5 * 1024 * 1024 }); }));
+const background = Promise.all(Array.from({ length: 4 }, async () => { while (heavy) await callTool("engine", { id: "V-12", size: 5 * 1024 * 1024 }); }));
 add(await lagWindow(() => measure("echo while 4 x 5 MB run on another slot", () => callTool("echo", { id: "V-12" }), { n: 1000, warmup: 0 })));
 heavy = false;
 await background;
