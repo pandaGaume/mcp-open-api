@@ -47,6 +47,11 @@
             "types": "./dist/designer/index.d.ts",
             "import": "./dist/designer/index.js"
         },
+        "./plugin": {
+            "types": "./dist/plugin/index.d.ts",
+            "import": "./dist/plugin/index.js",
+            "default": "./dist/plugin/index.js"
+        },
         "./schemas/binding-1.schema.json": "./schemas/binding-1.schema.json"
     },
     "files": [
@@ -59,7 +64,7 @@
         "test": "vitest run",
         "bench": "node bench/run.mjs",
         "demo:designer": "node scripts/designer-demo.mjs",
-        "smoke": "node --input-type=module -e \"await import('./dist/index.js'); await import('./dist/compiler/index.js'); await import('./dist/host/index.js'); await import('./dist/designer/index.js'); const ui = await import('./dist/ui/designer-core.js'); if (typeof ui.DesignSession !== 'function') throw new Error('ui bundle'); console.log('dist entries load')\" && node scripts/serve-check.mjs",
+        "smoke": "node --input-type=module -e \"await import('./dist/index.js'); await import('./dist/compiler/index.js'); await import('./dist/host/index.js'); await import('./dist/designer/index.js'); const plugin = (await import('./dist/plugin/index.js')).default; if (plugin.apiVersion !== 1) throw new Error('plugin API'); const ui = await import('./dist/ui/designer-core.js'); if (typeof ui.DesignSession !== 'function') throw new Error('ui bundle'); console.log('dist entries load')\" && node scripts/serve-check.mjs",
         "format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"ui/**/*.{js,html,css}\" \"scripts/*.mjs\"",
         "format:fix": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"ui/**/*.{js,html,css}\" \"scripts/*.mjs\"",
         "prepublishOnly": "npm run build"
@@ -69,7 +74,7 @@
     },
     "devDependencies": {
         "@cfworker/json-schema": "^4.1.1",
-        "@cyanmycelium/mcp-broker": "^1.7.0",
+        "@cyanmycelium/mcp-broker": "^1.10.0",
         "@cyanmycelium/mcp-core": "^1.4.1",
         "@types/node": "^20.11.0",
         "prettier": "^3.2.0",
