@@ -13,7 +13,6 @@ The diagnostic, topology and testing practices are adapted from mcp-broker's `AG
 - Preserve signature verification, broker authorization and engine limits. Fix the cause of a refusal instead of disabling these checks.
 - Keep secrets and private keys out of the repository, images and logs. The current `.gitignore` does not protect `.env` or `.pem` files.
 - Distinguish a proposed procedure, an executed command and a verified result. A successful build does not prove deployment success.
-- The requested filename is `AGENT.md`. Some agents automatically load `AGENTS.md`: check the tool's conventions before assuming this guide will be read.
 
 ## 1. What the project does
 
