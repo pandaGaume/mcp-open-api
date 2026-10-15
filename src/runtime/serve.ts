@@ -131,12 +131,18 @@ export async function serveManifest(host: ILoopbackHost, manifest: IManifest, op
     const [serverEnd, clientEnd] = LoopbackTransport.createPair();
     const server = new McpServerBuilder().withName(manifest.slot).withTransport(serverEnd).register(new ManifestBehavior(engine)).build();
     await server.start();
-    handle = host.registerLoopbackProvider(manifest.slot, clientEnd, options.principal ? { principal: options.principal } : {});
     const stop = async (): Promise<void> => {
         await server.stop();
         engine.close();
         if (!options.pool) pool.close();
     };
+
+    try {
+        handle = host.registerLoopbackProvider(manifest.slot, clientEnd, options.principal ? { principal: options.principal } : {});
+    } catch (error) {
+        await stop();
+        throw error;
+    }
 
     const params = declarationOf(manifest);
     if (!params) return { engine, handle, stop };

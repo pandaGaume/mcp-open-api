@@ -1,4 +1,4 @@
-[![npm](https://img.shields.io/npm/v/@cyanmycelium/mcp-open-api)](https://www.npmjs.com/package/@cyanmycelium/mcp-open-api) [![mcp-broker: 1.7.0](docs/assets/mcp-broker-badge.svg)](https://github.com/pandaGaume/mcp-broker)
+[![npm](https://img.shields.io/npm/v/@cyanmycelium/mcp-open-api)](https://www.npmjs.com/package/@cyanmycelium/mcp-open-api) [![mcp-broker: 1.10.0](docs/assets/mcp-broker-badge.svg)](https://github.com/pandaGaume/mcp-broker)
 [![CI](https://github.com/pandaGaume/mcp-open-api/actions/workflows/ci.yml/badge.svg)](https://github.com/pandaGaume/mcp-open-api/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -93,6 +93,10 @@ npx @cyanmycelium/mcp-open-api sign vannes.json --key keys/ot-team.pem
 
 To run the page locally, run `npm run build && npm run demo:designer`. It serves `dist/ui/` with a fake valve API, its Swagger UI-like page, a host config and a key.
 
+### As a broker plugin
+
+With mcp-broker 1.10.0 or later, install this package in the deployment's plugin directory and configure the module `@cyanmycelium/mcp-open-api/plugin` in `plugins[]`. It serves signed manifests in the broker process through loopback, without adding an OpenAPI dependency to the broker package. See [plugin configuration, Docker deployment and verification](docs/plugin.md).
+
 ## Status
 
 - **Implemented**:
@@ -108,7 +112,7 @@ Design: [docs/binding.md](docs/binding.md) and [docs/compiler.md](docs/compiler.
 ## Requirements
 
 - Node.js 22 or later for the host (a provider secret travels in a WebSocket handshake header); 20.11 for the compiler alone.
-- An mcp-broker, 1.7.0 or later: engineering limits by resource pattern, one declaration per slot.
+- An mcp-broker, 1.7.0 or later for the standalone host; 1.10.0 or later for deployment through `plugins[]`. Development and integration tests use 1.10.0 or later.
 - For the page: a browser with Ed25519 in WebCrypto (current Chrome, Edge, Firefox, Safari).
 
 ## Development

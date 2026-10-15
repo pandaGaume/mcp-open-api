@@ -38,6 +38,13 @@ export class McpHttpClient {
         return answer.result;
     }
 
+    async close(): Promise<void> {
+        if (!this._session) return;
+        const response = await fetch(this._url, { method: "DELETE", headers: { ...this._headers, "mcp-session-id": this._session } });
+        await response.text();
+        this._session = null;
+    }
+
     private _post(body: unknown): Promise<Response> {
         return fetch(this._url, {
             method: "POST",
